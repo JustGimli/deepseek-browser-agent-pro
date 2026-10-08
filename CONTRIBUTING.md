@@ -1,12 +1,12 @@
 # Contributing to DeepSeek Browser Agent
 
-Thank you for your interest in contributing! This project is in active development and all contributions are welcome.
+Thank you for your interest in contributing! All contributions are welcome.
 
 ## Getting Started
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/deepseek-browser-agent
-cd deepseek-browser-agent
+git clone https://github.com/JustGimli/deepseek-browser-agent-pro
+cd deepseek-browser-agent-pro
 npm install
 npx playwright install chromium
 node src/index.js --interactive
@@ -49,7 +49,7 @@ The tool is automatically included in the AI's system prompt — no other files 
 - One feature or bug fix per PR
 - Keep the existing code style (single quotes, 2-space indent)
 - Update `README.md` if you add a new tool or config option
-- Test your change manually before submitting
+- Run `npm test` and try your change manually before submitting
 
 ## Reporting Bugs
 

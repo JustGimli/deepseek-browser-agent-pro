@@ -1,23 +1,23 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/status-in%20development-orange?style=for-the-badge" alt="Status: In Development"/>
-<img src="https://img.shields.io/npm/v/deepseek-browser-agent?style=for-the-badge&color=blue" alt="npm version"/>
+<a href="https://www.npmjs.com/package/deepseek-browser-agent-pro"><img src="https://img.shields.io/npm/v/deepseek-browser-agent-pro?style=for-the-badge&color=blue" alt="npm version"/></a>
 <img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=for-the-badge" alt="Node.js"/>
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License"/>
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" alt="PRs Welcome"/>
 
-# 🤖 DeepSeek Browser Agent
+# 🤖 DeepSeek Browser Agent Pro
 
 **An autonomous AI coding agent that runs entirely for free — no API key required.**
 
 It drives a real browser to talk to [DeepSeek](https://chat.deepseek.com), giving you a Claude Code / Cursor-style coding agent powered by DeepSeek's models at zero cost.
 
-[Installation](#-installation) · [Quick Start](#-quick-start) · [Usage](#-usage) · [Configuration](#-configuration) · [Tools](#-available-tools) · [Contributing](#-contributing)
+[Installation](#-installation) · [Quick Start](#-quick-start) · [Usage](#-usage) · [Interactive commands](#-interactive-commands) · [Configuration](#-configuration) · [Tools](#-available-tools) · [Contributing](#-contributing)
 
 ---
 
-> ⚠️ **This project is currently in active development.**
-> Core functionality works, but you may encounter rough edges. Bug reports and contributions are very welcome — see [Contributing](#-contributing).
+> ⚠️ **Early release.** The agent drives the DeepSeek web UI, which can change without notice. If it breaks, run `deepseek-agent --calibrate` and open an issue.
+>
+> Based on [Omar-Azam/deepseek-browser-agent](https://github.com/Omar-Azam/deepseek-browser-agent) (MIT) — adds an interactive input box, chat history/resume, automatic context rollover, auto-retry on "server busy", and more. See the [changelog](./CHANGELOG.md).
 
 </div>
 
@@ -49,12 +49,13 @@ Your Terminal
 ## 📦 Installation
 
 ```bash
-npm install -g deepseek-browser-agent
+npm install -g deepseek-browser-agent-pro
 ```
 
 > Chromium downloads automatically after install (~150 MB, one time only).
+> If it was skipped (CI, offline): `npx playwright install chromium`.
 
-**Requirements:** Node.js ≥ 18
+**Requirements:** Node.js ≥ 18, a free [DeepSeek](https://chat.deepseek.com) account.
 
 ---
 
@@ -90,7 +91,8 @@ deepseek-agent [OPTIONS] [TASK]
   --debug              Print raw AI responses to the terminal
   --headless           Run browser invisibly (requires prior login)
   --save-log           Save full session log to ~/.deepseek-agent/logs/
-  --calibrate          Auto-detect DOM selectors (run if agent breaks)
+  --calibrate          Print DOM info to help fix selectors (run if the agent breaks)
+  -v, --version        Print version
   -h, --help           Show help
 
 Aliases:
@@ -115,9 +117,27 @@ dsa --debug "build a calculator"
 # Headless mode (faster — browser runs in background)
 dsa --headless "write unit tests for utils.js"
 
-# In interactive mode, type 'new' to start a fresh chat:
-❯ Task: new
 ```
+
+---
+
+## ⌨️ Interactive commands
+
+In `--interactive` mode the input box stays at the bottom of the terminal. Type `/` to open the command menu (↑↓ select, Tab fills, Enter runs). **Alt+Enter** or a trailing `\` adds a new line. While the agent works, **Esc** stops it, and anything you type is delivered with the next step.
+
+| Command | What it does |
+|---|---|
+| `/new_chat` | Start a fresh DeepSeek chat |
+| `/stop` | Stop the running task (or press Esc) |
+| `/continue` | Keep going after the step limit |
+| `/history` | List saved chats |
+| `/resume <n>` | Reopen chat number *n* from `/history` |
+| `/context` | Show estimated context usage |
+| `/headless on` / `/headless off` | Restart the browser invisibly / with a window |
+| `/help` | Show the list |
+| `/exit` | Quit |
+
+When the chat reaches 90% of the context limit, the agent asks DeepSeek for a summary and continues in a new chat automatically.
 
 ---
 
@@ -151,11 +171,17 @@ Drop `deepseek-agent.config.json` in your project root:
 
 | Setting | Default | Description |
 |---|---|---|
+| `DEEPSEEK_URL` | `https://chat.deepseek.com` | Chat page to automate |
 | `HEADLESS` | `false` | Hide the browser window |
-| `MAX_ITERATIONS` | `40` | Max agent steps per task before stopping |
+| `MAX_ITERATIONS` | `300` | Max agent steps per task before stopping |
 | `RESPONSE_TIMEOUT` | `180000` | Max ms to wait for a response (3 min) |
 | `STABLE_DELAY` | `2500` | Ms of silence that means DeepSeek is done |
 | `SEND_DELAY` | `400` | Ms between typing and pressing Enter |
+| `BUSY_MAX_RETRIES` | `20` | Auto-clicks of Continue on "server unavailable" before failing |
+| `BUSY_RETRY_DELAY` | `3000` | Ms to wait after each Continue click |
+| `CONTEXT_LIMIT` | `128000` | Model context size (tokens, estimated) |
+| `CONTEXT_ROLLOVER` | `0.9` | Fraction of the limit at which the chat is summarized and restarted |
+| `WORKING_DIR` | current dir | Project the tools operate on (same as `--dir`) |
 | `MAX_OUTPUT_LENGTH` | `8000` | Truncate long command outputs sent to AI |
 | `DEBUG` | `false` | Print raw AI responses to terminal |
 | `SESSION_DIR` | `~/.deepseek-agent/session` | Where browser cookies are saved |
@@ -194,7 +220,8 @@ Everything lives in `~/.deepseek-agent/` in your home directory:
 ~/.deepseek-agent/
 ├── session/        ← Browser cookies (login once, runs forever)
 ├── logs/           ← Session logs (only saved with --save-log)
-└── config.json     ← Your global settings
+├── history.json    ← Chats for /history and /resume
+└── config.json     ← Your global settings (optional)
 ```
 
 ---
@@ -219,6 +246,9 @@ Just run without `--headless` — the browser opens and you log in again:
 deepseek-agent --interactive
 ```
 
+### `--headless` says login is required
+Headless needs a saved login. Run `deepseek-agent --interactive` (without `--headless`) once first.
+
 ### Chromium didn't download automatically
 ```bash
 npx playwright install chromium
@@ -235,7 +265,7 @@ Increase the timeout in your config:
 ## 🗂️ Project Structure
 
 ```
-deepseek-browser-agent/
+deepseek-browser-agent-pro/
 ├── src/
 │   ├── index.js          ← CLI entry point and argument parsing
 │   ├── agent.js          ← Core agent loop (send → wait → parse → execute)
@@ -244,9 +274,12 @@ deepseek-browser-agent/
 │   ├── parser.js         ← Extracts tool calls from AI responses (6 strategies)
 │   ├── prompt.js         ← System prompt and conversation history manager
 │   ├── config.js         ← Configuration loader (global + per-project)
-│   ├── logger.js         ← ANSI-colored terminal output
-│   ├── calibrate.js      ← DOM selector inspector / auto-fix tool
+│   ├── logger.js         ← ANSI-colored terminal output + markdown rendering
+│   ├── ui.js             ← Persistent bottom input box and command menu
+│   ├── calibrate.js      ← DOM selector inspector
 │   └── postinstall.js    ← Auto-downloads Chromium after npm install
+├── test/                 ← node:test unit tests (npm test)
+├── CHANGELOG.md
 ├── LICENSE
 ├── README.md
 └── package.json
@@ -256,21 +289,21 @@ deepseek-browser-agent/
 
 ## 🤝 Contributing
 
-Contributions are very welcome — this project is in active development and there's plenty of room to grow.
+Contributions are very welcome — there's plenty of room to grow.
 
 ### Setting up locally
 
 ```bash
-git clone https://github.com/Omar-Azam/deepseek-browser-agent
-cd deepseek-browser-agent
-npm install
-npx playwright install chromium
+git clone https://github.com/JustGimli/deepseek-browser-agent-pro
+cd deepseek-browser-agent-pro
+npm install          # also downloads Chromium
+npm test
 node src/index.js --interactive
 ```
 
 ### Areas that need work
 
-- 🧪 **Tests** — there are currently no automated tests; a test suite would be a great contribution
+- 🧪 **Tests** — only the response parser is covered so far; tools and the agent loop need tests
 - 🎨 **UI selector resilience** — DeepSeek updates their UI occasionally; better selector strategies are welcome
 - 🔌 **More tools** — image generation, browser control, database tools, etc.
 - 🌐 **Other AI frontends** — adapting the browser layer to work with other free AI chats
@@ -298,19 +331,19 @@ Open an issue on GitHub with:
 
 ## ⚠️ Disclaimer
 
-This project automates a web browser to interact with chat.deepseek.com. Automating web UIs may violate the terms of service of the website being automated. Use this tool for **personal and development purposes only**. The authors take no responsibility for account suspensions or other consequences of use.
+This project automates a web browser to interact with chat.deepseek.com. Automating web UIs may violate the terms of service of the website being automated. Use this tool for **personal and development purposes only**. The agent can run arbitrary shell commands and modify files in your working directory — run it in projects you can restore (e.g. under git). The authors take no responsibility for account suspensions, data loss or other consequences of use. Not affiliated with DeepSeek.
 
 ---
 
 ## 📄 License
 
-MIT — see [LICENSE](./LICENSE) for details.
+MIT — see [LICENSE](./LICENSE). Original work © Omar Azam; modifications © JustGimli.
 
 ---
 
 <div align="center">
 
-**Built with Playwright · Powered by DeepSeek · Free forever**
+**Built with Playwright · Powered by DeepSeek**
 
 If this project helped you, consider giving it a ⭐ on GitHub!
 

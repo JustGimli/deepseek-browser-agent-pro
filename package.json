@@ -1,5 +1,5 @@
 {
-  "name": "deepseek-browser-agent",
+  "name": "deepseek-browser-agent-pro",
   "version": "1.0.0",
   "description": "AI coding agent powered by DeepSeek via browser automation — no API key needed",
   "main": "src/index.js",
@@ -11,11 +11,13 @@
     "start": "node src/index.js",
     "postinstall": "node src/postinstall.js",
     "debug": "node src/index.js --debug",
-    "calibrate": "node src/calibrate.js"
+    "calibrate": "node src/calibrate.js",
+    "test": "node --test"
   },
   "files": [
     "src/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "dependencies": {
@@ -29,15 +31,19 @@
     "agent",
     "deepseek",
     "browser-automation",
+    "playwright",
     "coding-agent",
     "cli",
     "llm"
   ],
-  "author": "",
+  "author": "JustGimli",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Omar-Azam/deepseek-browser-agent"
+    "url": "git+https://github.com/JustGimli/deepseek-browser-agent-pro.git"
   },
-  "homepage": "https://github.com/Omar-Azam/deepseek-browser-agent#readme"
+  "bugs": {
+    "url": "https://github.com/JustGimli/deepseek-browser-agent-pro/issues"
+  },
+  "homepage": "https://github.com/JustGimli/deepseek-browser-agent-pro#readme"
 }

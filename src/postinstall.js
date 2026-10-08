@@ -1,10 +1,9 @@
-// src/postinstall.js — Runs after `npm install -g deepseek-browser-agent`
+// src/postinstall.js — Runs after `npm install -g deepseek-browser-agent-pro`
 // Automatically downloads the Playwright Chromium browser.
 'use strict';
 
-const { execSync } = require('child_process');
-const path         = require('path');
-const os           = require('os');
+const { execFileSync } = require('child_process');
+const path             = require('path');
 
 // Skip in CI environments where a display isn't available
 if (process.env.CI || process.env.SKIP_PLAYWRIGHT_INSTALL) {
@@ -21,13 +20,10 @@ console.log('  Downloading Playwright Chromium browser...');
 console.log('  (This only happens once — ~150 MB)\n');
 
 try {
-  // Use the playwright binary bundled in this package's node_modules
-  const playwrightBin = path.join(__dirname, '..', 'node_modules', '.bin', 'playwright');
+  // Resolve playwright's CLI wherever npm put it (nested or hoisted)
+  const cli = path.join(path.dirname(require.resolve('playwright/package.json')), 'cli.js');
 
-  execSync(`"${playwrightBin}" install chromium`, {
-    stdio : 'inherit',
-    env   : { ...process.env },
-  });
+  execFileSync(process.execPath, [cli, 'install', 'chromium'], { stdio: 'inherit' });
 
   console.log('');
   console.log('  ✓ Browser installed successfully!');

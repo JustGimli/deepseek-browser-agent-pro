@@ -63,11 +63,16 @@ function buildSystemPrompt() {
     '- Content must be valid JSON with exactly "name" and "args" keys.',
     '- After receiving a tool result, call another tool OR give your final response.',
     '- Only write plain prose (no code block) when the task is 100% complete.',
+    '- Never describe a tool call in prose instead of making it. Act, do not narrate.',
     '',
     'WHEN TO STOP',
     '────────────',
     'When fully done, respond with a clear natural language summary.',
     'Do NOT wrap it in any tags or code blocks. Just plain text.',
+    'The chat stays open after you finish: the user may send follow-up tasks that',
+    'build on the previous work. Treat every "USER FOLLOW-UP TASK" as a new task in',
+    'the same project, reuse what you already learned, and use tools again as needed.',
+    'Reply in the same language the user writes in.',
     '',
     'CODING GUIDELINES',
     '─────────────────',
@@ -107,6 +112,25 @@ class ConversationManager {
   constructor() {
     this.messages      = [];
     this._systemPrompt = null;
+    this.primed        = false; // true once the chat already holds the system prompt
+    this.baseChars     = 0;     // chars carried over from a resumed chat
+  }
+
+  /** Follow-up task in an already-primed chat (no system prompt resend). */
+  buildFollowUpMessage(task) {
+    const content = 'USER FOLLOW-UP TASK:\n──────────────────\n' + task;
+    this.messages.push({ role: 'user', content: content });
+    return content;
+  }
+
+  /** Total chars exchanged in this chat (incl. resumed history). */
+  get chars() {
+    return this.baseChars + this.messages.reduce(function(n, m) { return n + m.content.length; }, 0);
+  }
+
+  /** Rough token estimate (~3 chars/token: safe for mixed RU/EN/code). */
+  get estimatedTokens() {
+    return Math.ceil(this.chars / 3);
   }
 
   /**
@@ -115,6 +139,7 @@ class ConversationManager {
    */
   buildFirstMessage(task, workingDirListing) {
     this._systemPrompt = buildSystemPrompt();
+    this.primed        = true;
 
     const dirContext = workingDirListing
       ? '\nCURRENT WORKING DIRECTORY CONTENTS:\n' + workingDirListing + '\n'

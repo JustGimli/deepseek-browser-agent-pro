@@ -1,6 +1,10 @@
 // src/parser.js — Parse DeepSeek's text responses to extract tool calls
 'use strict';
 
+const { TOOLS } = require('./tools');
+
+const isTool = name => typeof name === 'string' && Object.hasOwn(TOOLS, name);
+
 /**
  * Parse a raw DeepSeek response string.
  *
@@ -11,6 +15,11 @@
  */
 function parseResponse(rawText) {
   const text = stripThinkingBlocks(rawText).trim();
+
+  // ── Strategy DSML: DeepSeek's native tool-call markup ─────────────────────
+  //  Rendered as text like:  < | DSML | invoke name="read_file"> ... parameter name="path" string="true">x</ | DSML | parameter>
+  const dsml = parseDsml(text);
+  if (dsml) return { type: 'tool_call', name: dsml.name, args: dsml.args, raw: rawText };
 
   // ── Strategy 0 (DOM FALLBACK): bare "tool_call\n{ ... }" ─────────────────
   //
@@ -34,7 +43,7 @@ function parseResponse(rawText) {
     try {
       const parsed = JSON.parse(jsonRaw);
       const name   = parsed.name || parsed.tool || parsed.function;
-      const args   = parsed.args || parsed.arguments || parsed.parameters || parsed.input || {};
+      const args   = argsOf(parsed);
       if (name && typeof name === 'string') {
         return { type: 'tool_call', name, args, raw: rawText };
       }
@@ -42,7 +51,7 @@ function parseResponse(rawText) {
       const fixed = attemptJsonFix(jsonRaw);
       if (fixed) {
         const name = fixed.name || fixed.tool || fixed.function;
-        const args = fixed.args || fixed.arguments || fixed.parameters || fixed.input || {};
+        const args = argsOf(fixed);
         if (name) return { type: 'tool_call', name, args, raw: rawText };
       }
     }
@@ -56,7 +65,7 @@ function parseResponse(rawText) {
     try {
       const parsed = JSON.parse(raw);
       const name   = parsed.name || parsed.tool || parsed.function;
-      const args   = parsed.args || parsed.arguments || parsed.parameters || parsed.input || {};
+      const args   = argsOf(parsed);
       if (name && typeof name === 'string') {
         return { type: 'tool_call', name, args, raw: rawText };
       }
@@ -64,7 +73,7 @@ function parseResponse(rawText) {
       const fixed = attemptJsonFix(raw);
       if (fixed) {
         const name = fixed.name || fixed.tool || fixed.function;
-        const args = fixed.args || fixed.arguments || fixed.parameters || fixed.input || {};
+        const args = argsOf(fixed);
         if (name) return { type: 'tool_call', name, args, raw: rawText };
       }
       return {
@@ -76,13 +85,15 @@ function parseResponse(rawText) {
   }
 
   // ── Strategy 2: ```json block with "name"/"tool" key ──────────────────────
+  //  Loose strategies (2, 5, 6) only accept real tool names, so a final answer that
+  //  quotes e.g. a package.json ({"name": "my-app"}) is not mistaken for a tool call.
   const jsonFenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
   if (jsonFenceMatch) {
     try {
       const parsed = JSON.parse(jsonFenceMatch[1]);
       const name   = parsed.name || parsed.tool || parsed.function;
-      const args   = parsed.args || parsed.arguments || parsed.parameters || parsed.input || {};
-      if (name && typeof name === 'string') {
+      const args   = argsOf(parsed);
+      if (isTool(name)) {
         return { type: 'tool_call', name, args, raw: rawText };
       }
     } catch {}
@@ -114,8 +125,8 @@ function parseResponse(rawText) {
     const jsonObj = extractLargestJsonObject(text);
     if (jsonObj) {
       const name = jsonObj.name || jsonObj.tool || jsonObj.function;
-      const args = jsonObj.args || jsonObj.arguments || jsonObj.parameters || jsonObj.input || {};
-      if (name && typeof name === 'string') {
+      const args = argsOf(jsonObj);
+      if (isTool(name)) {
         return { type: 'tool_call', name, args, raw: rawText };
       }
     }
@@ -123,7 +134,7 @@ function parseResponse(rawText) {
 
   // ── Strategy 6: Python-style function call in code block ──────────────────
   const funcMatch = text.match(/```\w*\s*([\w_]+)\(([^)]*)\)\s*```/);
-  if (funcMatch) {
+  if (funcMatch && isTool(funcMatch[1])) {
     const name    = funcMatch[1];
     const argsRaw = funcMatch[2];
     const args    = {};
@@ -148,6 +159,42 @@ function parseResponse(rawText) {
 // ─────────────────────────────────────────────
 //  Helpers
 // ─────────────────────────────────────────────
+
+/** Args of a parsed tool object; if the model flattened them next to "name", use those */
+function argsOf(o) {
+  const a = o.args || o.arguments || o.parameters || o.input;
+  if (a) return a;
+  const { name, tool, function: fn, ...rest } = o;
+  return rest;
+}
+
+/** Parse DeepSeek-native DSML invoke/parameter markup. Returns {name,args} or null. */
+function parseDsml(text) {
+  const inv = text.match(/DSML[^>]*?invoke\s+name="([\w.-]+)"\s*>([\s\S]*)/i);
+  if (!inv) return null;
+
+  const args = {};
+  const re   = /parameter\s+name="([\w.-]+)"([^>]*)>([\s\S]*?)<\/[^>]*parameter>/gi;
+  let m;
+  while ((m = re.exec(inv[2])) !== null) {
+    const [, key, attrs, body] = m;
+    const isString = /string="true"/i.test(attrs);
+    let val = body;
+    if (!isString) { try { val = JSON.parse(body); } catch { val = body.trim(); } }
+    // A single "args" parameter holding a JSON object is the whole argument set
+    if (key === 'args' && val && typeof val === 'object' && !Array.isArray(val)) return { name: inv[1], args: val };
+    args[key] = val;
+  }
+  // Fallback: closing tags mangled by the DOM — take the first JSON object after the invoke
+  if (!Object.keys(args).length) {
+    const obj = extractLargestJsonObject(inv[2]);
+    if (obj) return { name: inv[1], args: obj.args && typeof obj.args === 'object' ? obj.args : obj };
+  }
+  // Last resort: "name=..." parameters whose value runs up to the next tag / DSML marker
+  const loose = /parameter\s+name="([\w.-]+)"[^>]*>([\s\S]*?)(?=\s*(?:<|[|｜]?\s*DSML|$))/gi;
+  while ((m = loose.exec(inv[2])) !== null) if (m[2].trim()) args[m[1]] = m[2].trim();
+  return { name: inv[1], args };
+}
 
 function tryParseToolCall(name, inputRaw, rawText) {
   try {
@@ -242,31 +289,15 @@ function extractLargestJsonObject(text) {
   return best;
 }
 
-/** Format a tool result for sending back to the AI */
-function formatToolResult(toolName, result, isError = false) {
-  const status = isError ? 'ERROR' : 'SUCCESS';
-  return [
-    `[TOOL RESULT: ${toolName} | ${status}]`,
-    String(result),
-    `[END TOOL RESULT]`,
-  ].join('\n');
-}
-
-/** Check if a response looks like the agent is asking a clarifying question */
-function isAskingQuestion(text) {
-  const questionIndicators = [
-    /\?(\s*$)/m,
-    /could you (please |kindly )?clarify/i,
-    /can you provide more/i,
-    /what (do you|would you) (want|like|prefer)/i,
-    /please (specify|clarify|tell me)/i,
-  ];
-  return questionIndicators.some(re => re.test(text));
+/** Prose the model wrote before its tool call (its running commentary). */
+function extractCommentary(rawText) {
+  const text = stripThinkingBlocks(rawText);
+  const m = text.match(/(^|\n)[ \t]*(```tool_call|tool_call[ \t]*\n|[<｜|\s]*DSML|```(?:json)?\s*\n?\s*\{\s*"name")/i);
+  return (m ? text.slice(0, m.index) : '').trim();
 }
 
 module.exports = {
   parseResponse,
-  formatToolResult,
+  extractCommentary,
   stripThinkingBlocks,
-  isAskingQuestion,
 };
