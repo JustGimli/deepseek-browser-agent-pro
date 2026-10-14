@@ -1,7 +1,7 @@
 {
   "name": "deepseek-browser-agent-pro",
-  "version": "1.0.0",
-  "description": "AI coding agent powered by DeepSeek via browser automation — no API key needed",
+  "version": "1.1.0",
+  "description": "Free AI coding agent powered by DeepSeek via browser automation — file/shell tools, its own browser tab, MCP servers, no API key needed",
   "main": "src/index.js",
   "bin": {
     "deepseek-agent": "src/index.js",
@@ -34,7 +34,11 @@
     "playwright",
     "coding-agent",
     "cli",
-    "llm"
+    "llm",
+    "mcp",
+    "model-context-protocol",
+    "web-automation",
+    "cdp"
   ],
   "author": "JustGimli",
   "license": "MIT",

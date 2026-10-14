@@ -6,6 +6,7 @@ const os           = require('os');
 const path         = require('path');
 const config       = require('./config');
 const logger       = require('./logger');
+const { stripThinkingBlocks } = require('./parser');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Selector banks — ordered by likelihood, with fallbacks
@@ -52,12 +53,40 @@ const SEL = {
     '[class*="newChat"]',
   ],
 
-  // The main chat messages container
-  messageContainer: [
-    '[class*="chat-content"]',
-    '[class*="message-list"]',
-    '[class*="conversation"]',
-    'main',
+  // One block per assistant reply — counted to notice that a new reply started
+  assistantMessage: [
+    '[class*="assistant"][class*="message"]',
+    '[data-role="assistant"]',
+    '[class*="markdown-content"]',
+    '.ds-markdown',
+    '[class*="chat-message"]',
+    '[class*="message-bubble"]',
+  ],
+
+  // Content element of an assistant reply — the last match is the reply being read
+  assistantContent: [
+    '.ds-markdown',
+    '[class*="assistant"] [class*="markdown"]',
+    '[class*="assistant"] [class*="content"]',
+    '[data-role="assistant"] [class*="content"]',
+    '[class*="ai-message"] [class*="content"]',
+    '[class*="bot-message"] [class*="content"]',
+    '[class*="response-content"]',
+    '[class*="message-content"]:last-child',
+  ],
+
+  // Anything visible from this list means DeepSeek is still generating
+  generating: [
+    'button[aria-label*="Stop" i]',
+    '[class*="stop-gen"]',
+    '[class*="stopGen"]',
+    '[class*="generating"]',
+    '[class*="typing"]',
+    '[class*="loading"]',
+    '[class*="spinner"]',
+    '[class*="blink"]',
+    '[class*="cursor"]',
+    '[class*="pulsing"]',
   ],
 };
 
@@ -376,27 +405,19 @@ class DeepSeekBrowser {
 
   /** Count how many "response" blocks are visible */
   async _getMessageCount() {
-    return await this.page.evaluate(() => {
-      const candidates = [
-        '[class*="assistant"][class*="message"]',
-        '[data-role="assistant"]',
-        '[class*="markdown-content"]',
-        '.ds-markdown',
-        '[class*="chat-message"]',
-        '[class*="message-bubble"]',
-      ];
+    return await this.page.evaluate(candidates => {
       for (const sel of candidates) {
         const els = document.querySelectorAll(sel);
         if (els.length > 0) return els.length;
       }
       // Broad fallback
       return document.querySelectorAll('[class*="message"]').length;
-    });
+    }, SEL.assistantMessage);
   }
 
   /** Extract the text of the last assistant message — including code blocks */
   async _extractLastMessage() {
-    return await this.page.evaluate(() => {
+    return await this.page.evaluate(directSelectors => {
 
       // ── Helper: get all text including code blocks ────────────────────────
       // Walks the DOM and reconstructs text, re-adding fence markers for code
@@ -478,17 +499,6 @@ class DeepSeekBrowser {
       }
 
       // ── Attempt 1: Specific assistant-message selectors ──────────────────
-      const directSelectors = [
-        '.ds-markdown',
-        '[class*="assistant"] [class*="markdown"]',
-        '[class*="assistant"] [class*="content"]',
-        '[data-role="assistant"] [class*="content"]',
-        '[class*="ai-message"] [class*="content"]',
-        '[class*="bot-message"] [class*="content"]',
-        '[class*="response-content"]',
-        '[class*="message-content"]:last-child',
-      ];
-
       for (const sel of directSelectors) {
         const els = document.querySelectorAll(sel);
         if (els.length > 0) {
@@ -525,7 +535,7 @@ class DeepSeekBrowser {
       }
 
       return '';
-    });
+    }, SEL.assistantContent);
   }
 
   /** Click DeepSeek's "stop generating" button if it is showing */
@@ -565,43 +575,12 @@ class DeepSeekBrowser {
 
   /** True if DeepSeek is still streaming / generating */
   async _isGenerating() {
-    return await this.page.evaluate(() => {
-      // Check for stop button
-      const stopSelectors = [
-        'button[aria-label*="Stop" i]',
-        '[class*="stop-gen"]',
-        '[class*="stopGen"]',
-        '[class*="generating"]',
-      ];
-      for (const sel of stopSelectors) {
-        const el = document.querySelector(sel);
-        if (el) {
-          const s = window.getComputedStyle(el);
-          if (s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0') return true;
-        }
-      }
-
-      // Check for animated loading/typing indicators
-      const loaderSelectors = [
-        '[class*="typing"]',
-        '[class*="loading"]',
-        '[class*="spinner"]',
-        '[class*="blink"]',
-        '[class*="cursor"]',
-        '[class*="pulsing"]',
-        'svg[class*="loading"]',
-        'svg[class*="spinner"]',
-      ];
-      for (const sel of loaderSelectors) {
-        const el = document.querySelector(sel);
-        if (el) {
-          const s = window.getComputedStyle(el);
-          if (s.display !== 'none' && s.visibility !== 'hidden') return true;
-        }
-      }
-
-      return false;
-    });
+    return await this.page.evaluate(selectors => selectors.some(sel => {
+      const el = document.querySelector(sel);
+      if (!el) return false;
+      const s = window.getComputedStyle(el);
+      return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+    }), SEL.generating);
   }
 
   // ── Text Cleanup ───────────────────────────────────────────────────────────
@@ -609,11 +588,8 @@ class DeepSeekBrowser {
   _cleanText(text) {
     if (!text) return '';
 
-    return text
-      // Strip DeepSeek R1 chain-of-thought blocks
-      .replace(/<think>[\s\S]*?<\/think>\n?/gi, '')
-      // Strip "Thinking..." headers that sometimes prefix responses
-      .replace(/^Thinking\.{0,3}\n[\s\S]*?\n\n/m, '')
+    // Chain-of-thought blocks / "Thinking..." headers first (same rules as the parser)
+    return stripThinkingBlocks(text)
       // Strip "label / Copy / Download" code-block chrome, keep the label as the fence language
       .replace(/(?:^|\n)(?:([\w+#.-]{1,20})\s*\n+)?(?:(?:Copy|Download)\s*\n+)+```(\w*)\n/g,
         (_, label, lang) => '\n```' + (lang || label || '') + '\n')

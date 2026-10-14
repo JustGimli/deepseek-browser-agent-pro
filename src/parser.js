@@ -4,6 +4,23 @@
 const { TOOLS } = require('./tools');
 
 const isTool = name => typeof name === 'string' && Object.hasOwn(TOOLS, name);
+const call   = (name, args, raw) => ({ type: 'tool_call', name, args, raw });
+
+/** JSON.parse, then a repaired retry (trailing commas, unquoted keys); null if neither works */
+function parseJson(str) {
+  try { return JSON.parse(str); } catch { return attemptJsonFix(str); }
+}
+
+/**
+ * Parsed object → tool call when it names a tool ("name" / "tool" / "function").
+ * knownOnly: loose strategies accept only real tool names, so a final answer that quotes
+ * e.g. a package.json ({"name": "my-app"}) is not mistaken for a tool call.
+ */
+function asCall(obj, raw, knownOnly = false) {
+  const name = obj && typeof obj === 'object' ? (obj.name || obj.tool || obj.function) : undefined;
+  if (typeof name !== 'string' || (knownOnly && !isTool(name))) return null;
+  return call(name, argsOf(obj), raw);
+}
 
 /**
  * Parse a raw DeepSeek response string.
@@ -16,143 +33,70 @@ const isTool = name => typeof name === 'string' && Object.hasOwn(TOOLS, name);
 function parseResponse(rawText) {
   const text = stripThinkingBlocks(rawText).trim();
 
-  // ── Strategy DSML: DeepSeek's native tool-call markup ─────────────────────
+  // ── DSML: DeepSeek's native tool-call markup ──────────────────────────────
   //  Rendered as text like:  < | DSML | invoke name="read_file"> ... parameter name="path" string="true">x</ | DSML | parameter>
   const dsml = parseDsml(text);
-  if (dsml) return { type: 'tool_call', name: dsml.name, args: dsml.args, raw: rawText };
+  if (dsml) return call(dsml.name, dsml.args, rawText);
 
-  // ── Strategy 0 (DOM FALLBACK): bare "tool_call\n{ ... }" ─────────────────
-  //
-  //  When the browser markdown renderer converts:
-  //    ```tool_call
-  //    { "name": "write_file", "args": {...} }
-  //    ```
-  //  …into a <pre><code class="language-tool_call"> element, our getFullText()
-  //  now reconstructs the fence.  BUT if that still fails for any reason, this
-  //  strategy catches the raw DOM text which looks like:
-  //
-  //    tool_call
-  //    {
-  //      "name": "write_file",
-  //      "args": { ... }
-  //    }
-  //
-  const bareMatch = text.match(/^tool_call\s*\n([\s\S]+)$/i);
-  if (bareMatch) {
-    const jsonRaw = bareMatch[1].trim();
-    try {
-      const parsed = JSON.parse(jsonRaw);
-      const name   = parsed.name || parsed.tool || parsed.function;
-      const args   = argsOf(parsed);
-      if (name && typeof name === 'string') {
-        return { type: 'tool_call', name, args, raw: rawText };
-      }
-    } catch {
-      const fixed = attemptJsonFix(jsonRaw);
-      if (fixed) {
-        const name = fixed.name || fixed.tool || fixed.function;
-        const args = argsOf(fixed);
-        if (name) return { type: 'tool_call', name, args, raw: rawText };
-      }
+  // ── Bare "tool_call\n{ ... }" — the ```tool_call fence got lost in the DOM ─
+  const bare = text.match(/^tool_call\s*\n([\s\S]+)$/i);
+  const bareCall = bare && asCall(parseJson(bare[1].trim()), rawText);
+  if (bareCall) return bareCall;
+
+  // ── PRIMARY: ```tool_call fenced block (fence rebuilt by getFullText) ─────
+  //  Invalid JSON here is a real error worth reporting back to the model.
+  const fenced = text.match(/```tool_call\s*([\s\S]*?)```/i);
+  if (fenced) {
+    const body = fenced[1].trim();
+    let obj, err = '';
+    try { obj = JSON.parse(body); } catch (e) { err = e.message; obj = attemptJsonFix(body); }
+    if (!obj) {
+      return { type: 'error', message: 'tool_call block had invalid JSON: ' + err + '\nContent: ' + body.slice(0, 300), raw: rawText };
     }
+    const fencedCall = asCall(obj, rawText);
+    if (fencedCall) return fencedCall;
   }
 
-  // ── Strategy 1 (PRIMARY): ```tool_call fenced code block ─────────────────
-  //  Our primary format — reconstructed by getFullText() from <pre><code>.
-  const fencedMatch = text.match(/```tool_call\s*([\s\S]*?)```/i);
-  if (fencedMatch) {
-    const raw = fencedMatch[1].trim();
-    try {
-      const parsed = JSON.parse(raw);
-      const name   = parsed.name || parsed.tool || parsed.function;
-      const args   = argsOf(parsed);
-      if (name && typeof name === 'string') {
-        return { type: 'tool_call', name, args, raw: rawText };
-      }
-    } catch (e) {
-      const fixed = attemptJsonFix(raw);
-      if (fixed) {
-        const name = fixed.name || fixed.tool || fixed.function;
-        const args = argsOf(fixed);
-        if (name) return { type: 'tool_call', name, args, raw: rawText };
-      }
-      return {
-        type    : 'error',
-        message : 'tool_call block had invalid JSON: ' + e.message + '\nContent: ' + raw.slice(0, 300),
-        raw     : rawText,
-      };
-    }
-  }
+  // ── ```json block with a known tool name ─────────────────────────────────
+  const jsonFence = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  const jsonCall  = jsonFence && asCall(parseJson(jsonFence[1]), rawText, true);
+  if (jsonCall) return jsonCall;
 
-  // ── Strategy 2: ```json block with "name"/"tool" key ──────────────────────
-  //  Loose strategies (2, 5, 6) only accept real tool names, so a final answer that
-  //  quotes e.g. a package.json ({"name": "my-app"}) is not mistaken for a tool call.
-  const jsonFenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  if (jsonFenceMatch) {
-    try {
-      const parsed = JSON.parse(jsonFenceMatch[1]);
-      const name   = parsed.name || parsed.tool || parsed.function;
-      const args   = argsOf(parsed);
-      if (isTool(name)) {
-        return { type: 'tool_call', name, args, raw: rawText };
-      }
-    } catch {}
-  }
-
-  // ── Strategy 3: XML <tool_call> ───────────────────────────────────────────
-  const xmlMatch = text.match(
+  // ── XML <tool_call><name>…</name><input|args>…</…></tool_call> ───────────
+  const xml = text.match(
     /<tool_call[^>]*>\s*(?:<name>([\s\S]*?)<\/name>\s*)?(?:<input>([\s\S]*?)<\/input>|<args>([\s\S]*?)<\/args>)\s*<\/tool_call>/i
   );
-  if (xmlMatch) {
-    const name     = (xmlMatch[1] || '').trim();
-    const inputRaw = stripCodeFences((xmlMatch[2] || xmlMatch[3] || '').trim());
-    if (name) return tryParseToolCall(name, inputRaw, rawText);
+  if (xml && (xml[1] || '').trim()) {
+    const name     = xml[1].trim();
+    const inputRaw = stripCodeFences((xml[2] || xml[3] || '').trim());
+    const args     = parseJson(inputRaw);
+    if (args) return call(name, args, rawText);
+    return { type: 'error', message: `Tool "${name}" returned invalid JSON\nRaw input: ${inputRaw.slice(0, 200)}`, raw: rawText };
   }
 
-  // ── Strategy 4: XML with angle-brackets stripped by DOM ───────────────────
-  const domStrippedMatch = text.match(
-    /tool_call\s+name\s+([\w_]+)\s*\/name\s+input\s*([\s\S]*?)\s*\/input\s*\/tool_call/i
-  );
-  if (domStrippedMatch) {
-    const name     = domStrippedMatch[1].trim();
-    const inputRaw = stripCodeFences(domStrippedMatch[2].trim());
-    return tryParseToolCall(name, inputRaw, rawText);
-  }
-
-  // ── Strategy 5: Any JSON object with "name" key anywhere in text ──────────
-  //  Uses a greedy match to find the outermost JSON object (not fragments).
+  // ── Any JSON object with a known tool name anywhere in the text ───────────
   if (/["'](?:name|tool|function)["']\s*:\s*["'][\w_]+["']/.test(text)) {
-    const jsonObj = extractLargestJsonObject(text);
-    if (jsonObj) {
-      const name = jsonObj.name || jsonObj.tool || jsonObj.function;
-      const args = argsOf(jsonObj);
-      if (isTool(name)) {
-        return { type: 'tool_call', name, args, raw: rawText };
-      }
-    }
+    const anyCall = asCall(extractLargestJsonObject(text), rawText, true);
+    if (anyCall) return anyCall;
   }
 
-  // ── Strategy 6: Python-style function call in code block ──────────────────
+  // ── Python-style call in a code block:  ```read_file(path="a.js")``` ──────
   const funcMatch = text.match(/```\w*\s*([\w_]+)\(([^)]*)\)\s*```/);
   if (funcMatch && isTool(funcMatch[1])) {
-    const name    = funcMatch[1];
-    const argsRaw = funcMatch[2];
-    const args    = {};
-    const argRe   = /(\w+)\s*=\s*(?:"([^"]*?)"|'([^']*?)'|(\d+(?:\.\d+)?)|(\btrue\b|\bfalse\b))/g;
+    const args  = {};
+    const argRe = /(\w+)\s*=\s*(?:"([^"]*?)"|'([^']*?)'|(\d+(?:\.\d+)?)|(\btrue\b|\bfalse\b))/g;
     let   m;
-    while ((m = argRe.exec(argsRaw)) !== null) {
+    while ((m = argRe.exec(funcMatch[2])) !== null) {
       const key = m[1];
       if      (m[2] !== undefined) args[key] = m[2];
       else if (m[3] !== undefined) args[key] = m[3];
       else if (m[4] !== undefined) args[key] = parseFloat(m[4]);
       else if (m[5] !== undefined) args[key] = m[5] === 'true';
     }
-    if (Object.keys(args).length > 0) {
-      return { type: 'tool_call', name, args, raw: rawText };
-    }
+    if (Object.keys(args).length > 0) return call(funcMatch[1], args, rawText);
   }
 
-  // ── No tool call detected — final prose response ───────────────────────────
+  // ── No tool call detected — final prose response ──────────────────────────
   return { type: 'final', content: text, raw: rawText };
 }
 
@@ -194,24 +138,6 @@ function parseDsml(text) {
   const loose = /parameter\s+name="([\w.-]+)"[^>]*>([\s\S]*?)(?=\s*(?:<|[|｜]?\s*DSML|$))/gi;
   while ((m = loose.exec(inv[2])) !== null) if (m[2].trim()) args[m[1]] = m[2].trim();
   return { name: inv[1], args };
-}
-
-function tryParseToolCall(name, inputRaw, rawText) {
-  try {
-    const args = JSON.parse(inputRaw);
-    return { type: 'tool_call', name, args, raw: rawText };
-  } catch (e) {
-    // Try to fix common JSON issues
-    const fixed = attemptJsonFix(inputRaw);
-    if (fixed !== null) {
-      return { type: 'tool_call', name, args: fixed, raw: rawText };
-    }
-    return {
-      type    : 'error',
-      message : `Tool "${name}" returned invalid JSON: ${e.message}\nRaw input: ${inputRaw.slice(0, 200)}`,
-      raw     : rawText,
-    };
-  }
 }
 
 /** Strip ```json ... ``` or ``` ... ``` fences */
@@ -267,18 +193,10 @@ function extractLargestJsonObject(text) {
         depth--;
         if (depth === 0) {
           const candidate = text.slice(i, j + 1);
-          if (candidate.length > bestLen) {
-            try {
-              const parsed = JSON.parse(candidate);
-              best    = parsed;
-              bestLen = candidate.length;
-            } catch {
-              const fixed = attemptJsonFix(candidate);
-              if (fixed && candidate.length > bestLen) {
-                best    = fixed;
-                bestLen = candidate.length;
-              }
-            }
+          const parsed = candidate.length > bestLen ? parseJson(candidate) : null;
+          if (parsed) {
+            best    = parsed;
+            bestLen = candidate.length;
           }
           break;
         }

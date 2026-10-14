@@ -4,12 +4,16 @@
 const fs                           = require('fs');
 const os                           = require('os');
 const path                         = require('path');
-const { execSync }                 = require('child_process');
 const config                       = require('./config');
 const logger                       = require('./logger');
 const DeepSeekBrowser              = require('./browser');
 const InputUI                      = require('./ui');
-const { executeTool }              = require('./tools');
+const { TOOLS, executeTool }       = require('./tools');
+const web                          = require('./tools/browser');
+const { stopProcesses }            = require('./tools/shell');
+const { walk }                     = require('./tools/util');
+const { connectMcpServers,
+        closeMcp }                 = require('./mcp');
 const { parseResponse,
         extractCommentary }        = require('./parser');
 const { ConversationManager }      = require('./prompt');
@@ -51,14 +55,19 @@ class DeepSeekAgent {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
-  /** Boot the browser and load DeepSeek */
-  async init() {
+  /** Boot the browser, load DeepSeek and connect MCP servers (before the first prompt lists the tools) */
+  async init({ mcp = true } = {}) {
     await this.browser.launch();
+    web.bind(this.browser);
+    if (mcp) await connectMcpServers();
     await this.browser.newChat();
   }
 
   /** Shut down cleanly */
   async shutdown() {
+    stopProcesses();
+    closeMcp();
+    await web.closeWeb();
     await this.browser.close();
   }
 
@@ -69,6 +78,7 @@ class DeepSeekAgent {
   async run(task) {
     this._running   = true;
     this._abort     = false;
+    this._ctrl      = new AbortController(); // stop() aborts the running tool (e.g. a long command)
     this.browser.abort = false;
     try {
       return await this._runLoop(task);
@@ -80,6 +90,7 @@ class DeepSeekAgent {
   async _runLoop(task) {
     if (this.interactive) logger.dim('Esc or /stop = stop · type a message + Enter = send it with the next step');
     const maxIter   = config.MAX_ITERATIONS;
+    let formatRetries = 0; // "looks like a tool call" re-asks in a row — capped so a final answer can't loop
 
     // ── 1. Build and send first message (or follow-up in an existing chat) ─
     logger.header(`Task: ${task.slice(0, 80)}${task.length > 80 ? '…' : ''}`);
@@ -87,14 +98,13 @@ class DeepSeekAgent {
     const firstMsg = this.conversation.primed
       ? this.conversation.buildFollowUpMessage(task)
       : this.conversation.buildFirstMessage(task, this._getWorkingDirListing());
-    this._lastTask = this._lastTask || task;
+    this._chatTask = this._chatTask || task; // first task of this chat: history title + rollover context
 
     if (config.DEBUG) {
       logger.dim('--- First message (truncated) ---');
       logger.dim(firstMsg.slice(0, 600) + '...');
     }
 
-    this._currentTask = this._currentTask || task;
     logger.info('Sending task to DeepSeek...');
     await this._send(firstMsg);
 
@@ -129,6 +139,7 @@ class DeepSeekAgent {
 
       // ── Case 1: Tool call ──────────────────────────────────────────────
       if (parsed.type === 'tool_call') {
+        formatRetries = 0;
         const note = extractCommentary(rawResponse);
         if (note) logger.thought(note);
         logger.toolCall(parsed.name, parsed.args);
@@ -140,7 +151,7 @@ class DeepSeekAgent {
         let isError = false;
 
         try {
-          result  = await executeTool(parsed.name, parsed.args);
+          result  = await executeTool(parsed.name, parsed.args, { signal: this._ctrl.signal });
           logger.toolResult(result);
         } catch (err) {
           result  = `Error: ${err.message}`;
@@ -170,13 +181,14 @@ class DeepSeekAgent {
       if (parsed.type === 'final') {
         // Safety net: if the "final" response text contains a tool_call block
         // that our parser missed (e.g. garbled by DOM), send a correction prompt.
+        const head = parsed.content.slice(0, 200);
         const looksLikeToolCall = (
           /tool_call/i.test(parsed.content) ||
           /"name"\s*:\s*"[\w_]+"/.test(parsed.content) ||
-          /write_file|read_file|run_command|list_directory/i.test(parsed.content.slice(0, 200))
+          Object.keys(TOOLS).some(name => head.includes(name))
         );
 
-        if (looksLikeToolCall && this.conversation.turnCount <= maxIter - 2) {
+        if (looksLikeToolCall && formatRetries++ < 2 && this.conversation.turnCount <= maxIter - 2) {
           logger.warn('Response looks like a tool call but was not parsed — asking AI to retry format...');
           const retry = this.conversation.addToolResult(
             'SYSTEM',
@@ -285,7 +297,7 @@ class DeepSeekAgent {
         logger.info('Starting new chat...');
         await this.browser.newChat();
         this.conversation = new ConversationManager();
-        this._lastTask = this._currentTask = null;
+        this._chatTask = null;
         continue;
       }
 
@@ -307,7 +319,7 @@ class DeepSeekAgent {
           this.conversation = new ConversationManager();
           this.conversation.primed    = true;
           this.conversation.baseChars = h.chars || 0;
-          this._lastTask = h.title;
+          this._chatTask = h.title;
           logger.success(`Resumed: ${h.title}`);
           this._showContext();
         } catch (err) {
@@ -334,6 +346,7 @@ class DeepSeekAgent {
     if (!this._running || this._abort) return;
     this._abort = true;
     this.browser.abort = true;
+    this._ctrl?.abort();
     logger.warn('Stopping…');
   }
 
@@ -372,10 +385,11 @@ class DeepSeekAgent {
 
     await this.browser.newChat();
     this.conversation = new ConversationManager();
-    this._lastTask    = '↪ ' + (this._currentTask || '').slice(0, 56);
+    const original    = (this._chatTask || '').replace(/^↪ /, '');
+    this._chatTask    = '↪ ' + original; // history marks the continuation chat
 
     const task = [
-      'ORIGINAL TASK: ' + (this._currentTask || '(see summary)'),
+      'ORIGINAL TASK: ' + (original || '(see summary)'),
       '',
       'SUMMARY OF THE PREVIOUS CHAT (it ran out of context — continue from here, do not redo finished work):',
       summary,
@@ -404,7 +418,7 @@ class DeepSeekAgent {
       const url = this.browser.page.url();
       if (!/\/a\/chat\/s\//.test(url)) return; // chat not created yet
       const list  = loadHistory();
-      const entry = list.find(h => h.url === url) || { url, title: (this._lastTask || '').slice(0, 60) };
+      const entry = list.find(h => h.url === url) || { url, title: (this._chatTask || '').slice(0, 60) };
       entry.chars   = this.conversation.chars;
       entry.updated = new Date().toISOString();
       fs.writeFileSync(HISTORY_FILE, JSON.stringify([entry, ...list.filter(h => h !== entry)].slice(0, 50), null, 2));
@@ -421,22 +435,10 @@ class DeepSeekAgent {
   }
 
   _getWorkingDirListing() {
-    try {
-      const result = execSync(
-        `find . -maxdepth 3 \\
-          -not -path '*/node_modules/*' \\
-          -not -path '*/.git/*' \\
-          -not -path '*/dist/*' \\
-          -not -path '*/.next/*' \\
-          -not -path '*/build/*' \\
-          -not -name '*.lock' \\
-          | sort | head -80`,
-        { cwd: config.WORKING_DIR, encoding: 'utf8', timeout: 5_000 }
-      ).trim();
-      return result || '(empty directory)';
-    } catch {
-      return '(could not read directory)';
-    }
+    const root = config.WORKING_DIR;
+    const list = walk(root, { hidden: true, maxDepth: 3, limit: 80 })
+      .map(p => './' + path.relative(root, p) + (p.endsWith(path.sep) ? '/' : ''));
+    return list.join('\n') || '(empty directory)';
   }
 
   async _saveConversationLog(task, finalResponse) {

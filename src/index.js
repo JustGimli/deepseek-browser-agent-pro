@@ -112,7 +112,14 @@ function printHelp() {
   {
     "HEADLESS": true,
     "MAX_ITERATIONS": 50,
-    "STABLE_DELAY": 3000
+    "STABLE_DELAY": 3000,
+    "mcpServers": {
+      "adspower-local-api": {
+        "command": "npx",
+        "args": ["-y", "local-api-mcp-typescript"],
+        "env": { "PORT": "50325", "API_KEY": "your_api_key" }
+      }
+    }
   }
 `);
 }
@@ -181,7 +188,7 @@ async function main() {
   // ── Calibrate mode ─────────────────────────────────────────────────────────
   if (opts.calibrate) {
     logger.header('Calibration Mode — Reading DOM selectors');
-    await agent.init();
+    await agent.init({ mcp: false });
     await agent.browser.dumpDebugInfo();
     await agent.browser.screenshot();
     logger.info('Done. Check the output above to update selectors in src/browser.js if needed.');

@@ -7,6 +7,43 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.0] — 2026-10-14
+
+### Added
+- Browser tools for the agent, in its own tab of the DeepSeek Chromium: `browser_open`, `browser_snapshot`, `browser_read`, `browser_click`, `browser_type`, `browser_press`, `browser_wait`, `browser_eval`, `browser_tab`, `browser_close`. Actions return a snapshot with numbered elements (`ref`) to click / type into
+- `browser_connect`: attach the browser tools to an external Chromium over CDP (e.g. an AdsPower profile)
+- MCP client (stdio): servers from `mcpServers` in the config are started on launch and their tools exposed as `mcp__<server>__<tool>`
+- Config: `WEB_TIMEOUT`, `mcpServers`, `MCP_START_TIMEOUT`, `MCP_CALL_TIMEOUT`
+- System prompt sections on web/browser usage and MCP tools
+- Missing required tool parameters are reported by name
+- `run_command` `background: true` for dev servers / watchers: returns pid, log file and first output; background processes are stopped when the agent exits
+- MCP servers start in parallel; optional per-server `"tools": [...]` allowlist
+- Tests for file/shell tools, `read_url` and the MCP client
+
+### Changed
+- `src/tools.js` split into `src/tools/` (`index.js` registry, `fs`, `shell`, `net`, `browser`)
+- `read_url` uses `fetch`, prefixes the HTTP status and final URL, and suggests `browser_open` for JS-rendered pages
+- The "looks like an unparsed tool call" re-ask knows every tool name and is capped at 2 in a row
+- `run_command` runs asynchronously: Esc / `/stop` kills the command (with its child processes), the UI stays responsive, output includes stderr
+- `replace_in_file` requires `find` to match exactly once unless `all_occurrences: true` (default was replace-all) and errors on no match
+- `read_file` always numbers lines and returns long files in whole-line chunks with the next `start_line` (was: first/last half of the file, middle cut)
+- `find_files`, `search_in_files`, recursive `list_directory` and the start-up directory listing are pure Node — no shell `find` / `grep`, so patterns with quotes work and Windows is closer
+- `search_in_files` matches the pattern as a regex or as plain text
+- Browser actions (click/type/press/wait) return a shorter snapshot to save context
+- Parser: one shared JSON → tool-call path for all strategies
+- DeepSeek DOM selectors all live in `SEL` in `src/browser.js`; thinking-block stripping shared with the parser
+
+### Removed
+- Tools `append_to_file` (now `write_file` with `append: true`), `create_directory`, `move_file`, `copy_file`, `get_file_info` (one-liners via `run_command`)
+- Parser strategy for XML tool calls with stripped angle brackets (the DOM never produces that text)
+
+### Fixed
+- `read_url` failed with `Invalid URL` when a server redirected with a relative `Location` header
+- `replace_in_file` mangled replacements containing `$&` / `` $` `` / `$'` and over-reported the count with `all_occurrences: false`
+- After `/resume`, a context rollover used the previous chat's task as "ORIGINAL TASK"
+
+---
+
 ## [1.0.0] — 2026-10-07
 
 First public release of `deepseek-browser-agent-pro`, a fork of
@@ -55,4 +92,4 @@ First public release of `deepseek-browser-agent-pro`, a fork of
 - Windows compatibility (working-dir listing uses `find`)
 - Better selector resilience for DeepSeek UI changes
 - Support for additional AI frontends
-- Plugin / custom tool system
+- Plugin / custom tool system (MCP covers part of it)

@@ -43,3 +43,14 @@ test('commentary before a tool call is extracted', () => {
   const t = `Reading the file first.\n${FENCE}tool_call\n{"name":"read_file","args":{"path":"a"}}\n${FENCE}`;
   assert.strictEqual(extractCommentary(t), 'Reading the file first.');
 });
+
+test('browser tool via loose json block', () => {
+  const r = parseResponse(`${FENCE}json\n{"name":"browser_click","args":{"ref":3}}\n${FENCE}`);
+  assert.deepStrictEqual([r.type, r.name, r.args], ['tool_call', 'browser_click', { ref: 3 }]);
+});
+
+test('registered MCP tool is recognised, unknown one is not', () => {
+  require('../src/tools').registerTool('mcp__demo__ping', { description: 'x', parameters: {}, execute: async () => 'pong' });
+  assert.strictEqual(parseResponse(`${FENCE}json\n{"name":"mcp__demo__ping","args":{}}\n${FENCE}`).name, 'mcp__demo__ping');
+  assert.strictEqual(parseResponse(`${FENCE}json\n{"name":"mcp__nope__x","args":{}}\n${FENCE}`).type, 'final');
+});
