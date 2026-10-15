@@ -181,4 +181,4 @@ function closeMcp() {
   servers.splice(0).forEach(s => s.close());
 }
 
-module.exports = { connectMcpServers, closeMcp, toParameters };
+module.exports = { connectMcpServers, closeMcp };

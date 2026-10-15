@@ -26,7 +26,6 @@ const SEL = {
   // Button that submits the message
   sendButton: [
     'button[aria-label*="Send" i]',
-    'button[aria-label*="send" i]',
     '[data-testid="send-button"]',
     'button[type="submit"]',
     '[class*="send-btn"]',
@@ -169,20 +168,18 @@ class DeepSeekBrowser {
   }
 
   async newChat() {
-    try {
-      // Try clicking the "New Chat" button in the sidebar
-      for (const sel of SEL.newChat) {
-        try {
-          const el = await this.page.$(sel);
-          if (el && await el.isVisible()) {
-            await el.click();
-            await this.page.waitForTimeout(1_000);
-            logger.dim('Started new chat session');
-            return;
-          }
-        } catch {}
-      }
-    } catch {}
+    // Try clicking the "New Chat" button in the sidebar
+    for (const sel of SEL.newChat) {
+      try {
+        const el = await this.page.$(sel);
+        if (el && await el.isVisible()) {
+          await el.click();
+          await this.page.waitForTimeout(1_000);
+          logger.dim('Started new chat session');
+          return;
+        }
+      } catch {}
+    }
 
     // Fallback: navigate to home which usually opens a fresh chat
     await this._navigate(config.DEEPSEEK_URL);
@@ -232,7 +229,7 @@ class DeepSeekBrowser {
     return new Promise(resolve => {
       const stdin   = process.stdin;
       const wasRaw  = stdin.isRaw;
-      const wasPaused = !stdin.readable;
+      const wasPaused = stdin.readableFlowing !== true;
 
       if (stdin.isTTY) stdin.setRawMode(false);
       stdin.resume();

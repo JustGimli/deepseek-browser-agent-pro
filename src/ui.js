@@ -91,8 +91,9 @@ class InputUI {
     if (this.fallback) {
       this._rl = this._rl || readline.createInterface({ input: process.stdin, output: process.stdout });
       return new Promise(res => {
-        this._rl.once('close', () => res(null));
-        this._rl.question('\n\x1b[96m❯\x1b[0m ', a => res(a));
+        const onClose = () => res(null);
+        this._rl.once('close', onClose);
+        this._rl.question('\n\x1b[96m❯\x1b[0m ', a => { this._rl.off('close', onClose); res(a); });
       });
     }
     return new Promise(res => { this._askRes = res; });
@@ -273,7 +274,7 @@ class InputUI {
     } else if (n === 'delete') {
       this.buf = this.buf.slice(0, this.cur) + this.buf.slice(this.cur + 1);
     } else if (key.ctrl && n === 'u') {
-      this.buf = this.buf.slice(0, this._lineStart()) + this.buf.slice(this.cur); this.cur = this._lineStart();
+      const ls = this._lineStart(); this.buf = this.buf.slice(0, ls) + this.buf.slice(this.cur); this.cur = ls;
     } else if (key.ctrl && n === 'k') {
       this.buf = this.buf.slice(0, this.cur) + this.buf.slice(this._lineEnd());
     } else if (key.ctrl && n === 'w') {

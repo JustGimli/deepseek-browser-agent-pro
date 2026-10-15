@@ -2,7 +2,6 @@
 'use strict';
 
 const os   = require('os');
-const path = require('path');
 const { TOOLS, getToolDescriptions } = require('./tools');
 const config = require('./config');
 
@@ -146,7 +145,6 @@ function buildSystemPrompt() {
 class ConversationManager {
   constructor() {
     this.messages      = [];
-    this._systemPrompt = null;
     this.primed        = false; // true once the chat already holds the system prompt
     this.baseChars     = 0;     // chars carried over from a resumed chat
   }
@@ -173,7 +171,6 @@ class ConversationManager {
    * working-directory context, and the user's task.
    */
   buildFirstMessage(task, workingDirListing) {
-    this._systemPrompt = buildSystemPrompt();
     this.primed        = true;
 
     const dirContext = workingDirListing
@@ -181,7 +178,7 @@ class ConversationManager {
       : '';
 
     const firstMessage = [
-      this._systemPrompt,
+      buildSystemPrompt(),
       '',
       '═'.repeat(60),
       '',
@@ -228,21 +225,6 @@ class ConversationManager {
   }
 
   /**
-   * Get the most recent user message content.
-   */
-  getLatestUserMessage() {
-    const userMessages = this.messages.filter(function(m) { return m.role === 'user'; });
-    return userMessages.length > 0 ? userMessages[userMessages.length - 1].content : '';
-  }
-
-  /**
-   * How many assistant turns have happened.
-   */
-  get turnCount() {
-    return this.messages.filter(function(m) { return m.role === 'assistant'; }).length;
-  }
-
-  /**
    * Export the full conversation as a readable text log.
    */
   exportLog() {
@@ -253,4 +235,4 @@ class ConversationManager {
   }
 }
 
-module.exports = { buildSystemPrompt, ConversationManager };
+module.exports = { ConversationManager };

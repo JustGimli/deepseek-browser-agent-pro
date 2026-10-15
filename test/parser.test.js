@@ -84,3 +84,23 @@ test('endsInUnterminatedString distinguishes truncation from malformed/complete'
   assert.strictEqual(endsInUnterminatedString('{"a":"ok"}'), false);  // balanced & complete
   assert.strictEqual(endsInUnterminatedString('{"a":"has \\" escaped"}'), false); // escaped quote
 });
+
+// ── ``` inside a JSON string must not end the tool_call block ───────────────
+
+const README = `# app\n\n${FENCE}bash\nnpm i\n${FENCE}\n\nDone.`;
+const writeReadme = JSON.stringify({ name: 'write_file', args: { path: 'README.md', content: README } });
+
+test('tool_call whose content contains ``` parses (fenced)', () => {
+  const r = parseResponse(`${FENCE}tool_call\n${writeReadme}\n${FENCE}`);
+  assert.deepStrictEqual([r.type, r.name, r.args.content], ['tool_call', 'write_file', README]);
+});
+
+test('tool_call whose content contains ``` parses (bare)', () => {
+  const r = parseResponse(`tool_call\n${writeReadme}`);
+  assert.deepStrictEqual([r.type, r.args.content], ['tool_call', README]);
+});
+
+test('mid-stream read cut after an inner ``` is incomplete', () => {
+  const cut = writeReadme.slice(0, writeReadme.indexOf('npm'));
+  assert.strictEqual(parseResponse(`${FENCE}tool_call\n${cut}`).type, 'incomplete');
+});

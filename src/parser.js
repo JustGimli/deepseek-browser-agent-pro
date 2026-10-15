@@ -50,9 +50,9 @@ function parseResponse(rawText) {
 
   // ── PRIMARY: ```tool_call fenced block (fence rebuilt by getFullText) ─────
   //  Invalid JSON here is a real error worth reporting back to the model.
-  const fenced = text.match(/```tool_call\s*([\s\S]*?)```/i);
+  const fenced = toolCallFence(text);
   if (fenced) {
-    const body = fenced[1].trim();
+    const body = fenced.body;
     let obj, err = '';
     try { obj = JSON.parse(body); } catch (e) { err = e.message; obj = attemptJsonFix(body); }
     if (!obj) {
@@ -61,11 +61,6 @@ function parseResponse(rawText) {
     const fencedCall = asCall(obj, rawText);
     if (fencedCall) return fencedCall;
   }
-
-  // ── ```json block with a known tool name ─────────────────────────────────
-  const jsonFence = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  const jsonCall  = jsonFence && asCall(parseJson(jsonFence[1]), rawText, true);
-  if (jsonCall) return jsonCall;
 
   // ── XML <tool_call><name>…</name><input|args>…</…></tool_call> ───────────
   const xml = text.match(
@@ -79,7 +74,7 @@ function parseResponse(rawText) {
     return { type: 'error', message: `Tool "${name}" returned invalid JSON\nRaw input: ${inputRaw.slice(0, 200)}`, raw: rawText };
   }
 
-  // ── Any JSON object with a known tool name anywhere in the text ───────────
+  // ── Any JSON object with a known tool name (e.g. in a ```json block) ──────
   if (/["'](?:name|tool|function)["']\s*:\s*["'][\w_]+["']/.test(text)) {
     const anyCall = asCall(extractLargestJsonObject(text), rawText, true);
     if (anyCall) return anyCall;
@@ -174,6 +169,46 @@ function attemptJsonFix(str) {
 }
 
 /**
+ * Scan the JSON object starting at text[i] ('{'), skipping braces and backticks inside
+ * strings. Returns { end, inStr }: end is the index just past its closing '}', or -1 if
+ * the text runs out first; inStr tells whether it ran out inside a string.
+ */
+function scanObject(text, i) {
+  let depth = 0, inStr = false, escape = false;
+  for (let j = i; j < text.length; j++) {
+    const ch = text[j];
+    if (inStr) {
+      if (escape)           escape = false;
+      else if (ch === '\\') escape = true;
+      else if (ch === '"')  inStr = false;
+    }
+    else if (ch === '"')    inStr = true;
+    else if (ch === '{')    depth++;
+    else if (ch === '}' && --depth === 0) return { end: j + 1, inStr: false };
+  }
+  return { end: -1, inStr };
+}
+
+/**
+ * The ```tool_call block → { body } or { incomplete: true }; null if there is none.
+ * The JSON is scanned rather than regex-matched up to the next ```, because a file's
+ * content may itself contain ``` (e.g. README code blocks) inside a JSON string.
+ */
+function toolCallFence(text) {
+  const open = /```tool_call\s*/i.exec(text);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  if (text[start] === '{') {
+    const { end, inStr } = scanObject(text, start);
+    if (end > 0) return { body: text.slice(start, end) };
+    if (inStr)   return { incomplete: true };
+  }
+  // Not a balanced object: take it up to the closing fence (malformed JSON → real error)
+  const close = text.indexOf('```', start);
+  return close < 0 ? { incomplete: true } : { body: text.slice(start, close).trim() };
+}
+
+/**
  * True if the text (from its first '{') ends inside an unterminated JSON string.
  * This is the signature of a response scraped while the model was still streaming
  * a large string value (e.g. a file's content) — distinct from complete-but-malformed
@@ -181,65 +216,28 @@ function attemptJsonFix(str) {
  */
 function endsInUnterminatedString(str) {
   const start = str.indexOf('{');
-  if (start < 0) return false;
-  let inStr = false, escape = false;
-  for (let i = start; i < str.length; i++) {
-    const ch = str[i];
-    if (escape)               { escape = false; continue; }
-    if (ch === '\\' && inStr) { escape = true;  continue; }
-    if (ch === '"')             inStr = !inStr;
-  }
-  return inStr;
+  return start >= 0 && scanObject(str, start).inStr;
 }
 
 /**
  * True if `text` looks like a tool call that was captured mid-stream (incomplete):
- *   - an opening ```tool_call fence with no closing fence yet, or
+ *   - a ```tool_call fence whose JSON / closing fence hasn't arrived yet, or
  *   - a tool-call object whose JSON ends inside an unterminated string.
  */
 function looksIncompleteToolCall(text) {
-  const openFence = /```tool_call/i.test(text);
-  if (openFence && !/```tool_call\s*[\s\S]*?```/i.test(text)) return true;
-  if (/["'](?:name|tool|function)["']\s*:/.test(text) && endsInUnterminatedString(text)) return true;
-  return false;
+  if (toolCallFence(text)?.incomplete) return true;
+  return /["'](?:name|tool|function)["']\s*:/.test(text) && endsInUnterminatedString(text);
 }
 
-/**
- * Extract the largest valid JSON object from a string.
- * Uses a bracket-counting approach rather than regex to handle nested objects.
- */
+/** The largest valid JSON object in a string (string-aware brace matching, not regex). */
 function extractLargestJsonObject(text) {
-  let best = null;
-  let bestLen = 0;
-
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] !== '{') continue;
-    let depth   = 0;
-    let inStr   = false;
-    let escape  = false;
-
-    for (let j = i; j < text.length; j++) {
-      const ch = text[j];
-      if (escape)          { escape = false; continue; }
-      if (ch === '\\' && inStr) { escape = true; continue; }
-      if (ch === '"')      { inStr = !inStr; continue; }
-      if (inStr)           { continue; }
-      if (ch === '{')      { depth++; }
-      else if (ch === '}') {
-        depth--;
-        if (depth === 0) {
-          const candidate = text.slice(i, j + 1);
-          const parsed = candidate.length > bestLen ? parseJson(candidate) : null;
-          if (parsed) {
-            best    = parsed;
-            bestLen = candidate.length;
-          }
-          break;
-        }
-      }
-    }
+  let best = null, bestLen = 0;
+  for (let i = text.indexOf('{'); i >= 0; i = text.indexOf('{', i + 1)) {
+    const { end } = scanObject(text, i);
+    if (end - i <= bestLen) continue;
+    const parsed = parseJson(text.slice(i, end));
+    if (parsed) { best = parsed; bestLen = end - i; }
   }
-
   return best;
 }
 

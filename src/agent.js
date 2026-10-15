@@ -206,7 +206,7 @@ class DeepSeekAgent {
           Object.keys(TOOLS).some(name => head.includes(name))
         );
 
-        if (looksLikeToolCall && formatRetries++ < 2 && this.conversation.turnCount <= maxIter - 2) {
+        if (looksLikeToolCall && formatRetries++ < 2 && iter <= maxIter - 2) {
           logger.warn('Response looks like a tool call but was not parsed — asking AI to retry format...');
           const retry = this.conversation.addToolResult(
             'SYSTEM',

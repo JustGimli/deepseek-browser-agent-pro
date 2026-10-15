@@ -3,8 +3,8 @@
 'use strict';
 
 const { chromium } = require('playwright');
+const os           = require('os');
 const path         = require('path');
-const fs           = require('fs');
 const config       = require('./config');
 
 console.log('\n🔬  DeepSeek Agent — Selector Calibration Tool\n');
@@ -162,8 +162,9 @@ async function calibrate() {
   }
 
   console.log(sep);
-  console.log('\n📸  Taking screenshot → /tmp/deepseek-calibrate.png');
-  await page.screenshot({ path: '/tmp/deepseek-calibrate.png', fullPage: false });
+  const shot = path.join(os.tmpdir(), 'deepseek-calibrate.png');
+  console.log(`\n📸  Taking screenshot → ${shot}`);
+  await page.screenshot({ path: shot, fullPage: false });
 
   console.log('\n✅  Calibration complete! Update src/browser.js SEL object with the selectors above.');
   console.log('    Press Ctrl+C to exit.\n');

@@ -44,7 +44,7 @@ function rel(abs) {
  * Recursive directory listing in pure Node (no shell, works on Windows).
  * Returns absolute paths (directories end with path.sep), directories first per level, sorted; stops at `limit`.
  */
-function walk(root, { hidden = false, maxDepth = Infinity, limit = 300, files = true, dirs = true } = {}) {
+function walk(root, { hidden = false, maxDepth = Infinity, limit = 300, dirs = true } = {}) {
   const out = [];
   (function visit(dir, depth) {
     let entries;
@@ -57,7 +57,7 @@ function walk(root, { hidden = false, maxDepth = Infinity, limit = 300, files = 
       if (e.isDirectory()) {
         if (dirs) out.push(abs + path.sep);
         if (depth < maxDepth) visit(abs, depth + 1);
-      } else if (files) {
+      } else {
         out.push(abs);
       }
     }

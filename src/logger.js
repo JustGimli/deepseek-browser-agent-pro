@@ -1,15 +1,13 @@
 // src/logger.js — ANSI-colored terminal output (no dependencies)
 'use strict';
 
+const { stripVTControlCharacters } = require('util');
+
 const A = {
   reset   : '\x1b[0m',
   bold    : '\x1b[1m',
   dim     : '\x1b[2m',
-  red     : '\x1b[31m',
-  green   : '\x1b[32m',
-  yellow  : '\x1b[33m',
   blue    : '\x1b[34m',
-  magenta : '\x1b[35m',
   cyan    : '\x1b[36m',
   white   : '\x1b[37m',
   gray    : '\x1b[90m',
@@ -32,20 +30,14 @@ function truncDisplay(str, max = 400) {
   return s.slice(0, max) + c('gray', `… (+${s.length - max} chars)`);
 }
 
-function jsonPreview(obj, max = 350) {
-  const s = JSON.stringify(obj, null, 2);
-  return truncDisplay(s, max);
-}
-
 // ── Markdown rendering ───────────────────────────────────────────────────────
 const BG_CODE = '\x1b[48;5;238m\x1b[38;5;223m';
 const BG_BLOCK = '\x1b[48;5;235m';
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /** Visible terminal width (ANSI stripped, emoji = 2 cells) */
 function vlen(str) {
   let n = 0;
-  for (const ch of String(str).replace(ANSI_RE, '')) {
+  for (const ch of stripVTControlCharacters(String(str))) {
     if (ch === '\uFE0F' || ch === '\u200D') continue; // variation selector / ZWJ: zero width
     n += /\p{Extended_Pictographic}/u.test(ch) ? 2 : 1;
   }
@@ -97,7 +89,7 @@ function renderTable(rows) {
         const t   = w[k] || '';
         const pad = ' '.repeat(Math.max(0, widths[i] - vlen(t)));
         return ri === 0
-          ? `\x1b[48;5;236m\x1b[36m ${t.replace(ANSI_RE, '')}${pad} ${A.reset}`
+          ? `\x1b[48;5;236m\x1b[36m ${stripVTControlCharacters(t)}${pad} ${A.reset}`
           : ` ${t}${pad} `;
       }).join(c('gray', '│')) + c('gray', '│'));
     }
@@ -134,7 +126,7 @@ function renderMarkdown(md) {
 
     const h = line.match(/^(#{1,6})\s+(.*)$/);
     if (h) {
-      const t = inline(h[2]).replace(ANSI_RE, '');
+      const t = stripVTControlCharacters(inline(h[2]));
       out.push(h[1].length === 1 ? `\x1b[48;5;24m\x1b[97m ${t} ${A.reset}`
              : h[1].length === 2 ? `\x1b[48;5;238m\x1b[96m ${t} ${A.reset}`
              : c('cyan', t));
@@ -215,12 +207,6 @@ ${c('cyan','╚═════════════════════�
     console.log(`\n${c('lgreen','●')} ${c('lgreen','Done')}\n`);
     console.log(renderMarkdown(msg).split('\n').map(l => '  ' + l).join('\n'));
     console.log('');
-  },
-
-  // ── Section separator ───────────────────────────────────────────────────────
-  separator(label = '') {
-    const pad = label ? ` ${label} ` : '';
-    console.log(`\n${c('gray', '·'.repeat(20) + pad + '·'.repeat(20))}\n`);
   },
 
   // ── Iteration marker ────────────────────────────────────────────────────────

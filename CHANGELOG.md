@@ -7,6 +7,31 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.2] — 2026-10-15
+
+### Fixed
+- `write_file` (and any tool call) failed with `tool_call block had invalid JSON: Unterminated string` when the content contained triple backticks (README code blocks, code that builds markdown): the ```` ```tool_call ```` block was cut at the first ```` ``` ```` inside the JSON string. The parser now finds the end of the JSON object with a string-aware scan
+- Mid-stream reads cut right after a ```` ``` ```` inside a string are detected as incomplete and re-read
+- The "looks like an unparsed tool call" re-ask was disabled once the whole chat (all tasks) passed `MAX_ITERATIONS - 2` replies; it now uses the current run's step
+- Ctrl+U in the multi-line input put the cursor on the wrong line
+- Fallback input mode (no TTY / short terminal) leaked a `close` listener per prompt (`MaxListenersExceededWarning` after 10 prompts)
+- stdin was not paused again after the login "press Enter" prompt
+- `npm run calibrate` saved its screenshot to `/tmp` (wrong on Windows); now uses the OS temp dir
+
+### Changed
+- Parser: one JSON scanner shared by tool-call extraction, mid-stream detection and loose JSON search; the separate ```` ```json ```` strategy is folded into the loose search
+- Removed unused code: `ConversationManager.getLatestUserMessage` / `turnCount`, `buildSystemPrompt` and `toParameters` exports, logger `separator` / `jsonPreview`, `walk` `files` option, a duplicate send-button selector
+- Logger strips ANSI codes with `util.stripVTControlCharacters`
+
+---
+
+## [1.1.1] — 2026-10-15
+
+### Fixed
+- A large tool call read while DeepSeek was still streaming was reported to the model as invalid JSON. Such reads are now detected as incomplete and re-read (up to 3 times) instead of costing a turn
+
+---
+
 ## [1.1.0] — 2026-10-14
 
 ### Added
