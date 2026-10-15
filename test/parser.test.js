@@ -1,7 +1,7 @@
 'use strict';
 const test   = require('node:test');
 const assert = require('node:assert');
-const { parseResponse, extractCommentary } = require('../src/parser');
+const { parseResponse, extractCommentary, endsInUnterminatedString } = require('../src/parser');
 
 const FENCE = '```';
 
@@ -53,4 +53,34 @@ test('registered MCP tool is recognised, unknown one is not', () => {
   require('../src/tools').registerTool('mcp__demo__ping', { description: 'x', parameters: {}, execute: async () => 'pong' });
   assert.strictEqual(parseResponse(`${FENCE}json\n{"name":"mcp__demo__ping","args":{}}\n${FENCE}`).name, 'mcp__demo__ping');
   assert.strictEqual(parseResponse(`${FENCE}json\n{"name":"mcp__nope__x","args":{}}\n${FENCE}`).type, 'final');
+});
+
+// ── Mid-stream reads: truncated tool calls are "incomplete", not "error" ─────
+
+test('tool_call read mid-stream (unterminated string) is incomplete, not an error', () => {
+  // Captured before DeepSeek finished streaming a large content field.
+  const r = parseResponse('tool_call\n{"name":"write_files","args":{"files":[{"path":"a.c","content":"/* start of a long file');
+  assert.strictEqual(r.type, 'incomplete');
+});
+
+test('unclosed tool_call fence is incomplete', () => {
+  const r = parseResponse(`${FENCE}tool_call\n{"name":"write_files","args":{"files":[`);
+  assert.strictEqual(r.type, 'incomplete');
+});
+
+test('complete-but-malformed JSON (not mid-stream) stays an error', () => {
+  // `{nope` is unbalanced but never inside an open string → a real model mistake.
+  assert.strictEqual(parseResponse(`${FENCE}tool_call\n{nope\n${FENCE}`).type, 'error');
+});
+
+test('complete valid tool_call still parses (regression)', () => {
+  const r = parseResponse(`${FENCE}tool_call\n{"name":"read_file","args":{"path":"a.js"}}\n${FENCE}`);
+  assert.deepStrictEqual([r.type, r.name], ['tool_call', 'read_file']);
+});
+
+test('endsInUnterminatedString distinguishes truncation from malformed/complete', () => {
+  assert.strictEqual(endsInUnterminatedString('{"a":"oops'), true);   // cut inside a string
+  assert.strictEqual(endsInUnterminatedString('{nope'), false);       // malformed, no open string
+  assert.strictEqual(endsInUnterminatedString('{"a":"ok"}'), false);  // balanced & complete
+  assert.strictEqual(endsInUnterminatedString('{"a":"has \\" escaped"}'), false); // escaped quote
 });

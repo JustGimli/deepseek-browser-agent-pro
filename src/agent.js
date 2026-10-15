@@ -91,6 +91,8 @@ class DeepSeekAgent {
     if (this.interactive) logger.dim('Esc or /stop = stop · type a message + Enter = send it with the next step');
     const maxIter   = config.MAX_ITERATIONS;
     let formatRetries = 0; // "looks like a tool call" re-asks in a row — capped so a final answer can't loop
+    let incompleteRetries = 0; // mid-stream re-reads in a row — capped so a truly broken read can't loop
+    let expectNew = true;      // false after an incomplete read: re-read the same message, don't wait for a new one
 
     // ── 1. Build and send first message (or follow-up in an existing chat) ─
     logger.header(`Task: ${task.slice(0, 80)}${task.length > 80 ? '…' : ''}`);
@@ -116,7 +118,8 @@ class DeepSeekAgent {
       this._showContext();
 
       // Wait for response from DeepSeek
-      const rawResponse = await this.browser.waitForResponse();
+      const rawResponse = await this.browser.waitForResponse(expectNew);
+      expectNew = true;
       this._saveHistory();
       if (this._abort) return this._stopped();
 
@@ -135,11 +138,12 @@ class DeepSeekAgent {
       this.conversation.addAssistantMessage(rawResponse);
 
       // Parse the response
-      const parsed = parseResponse(rawResponse);
+      let parsed = parseResponse(rawResponse);
 
       // ── Case 1: Tool call ──────────────────────────────────────────────
       if (parsed.type === 'tool_call') {
         formatRetries = 0;
+        incompleteRetries = 0;
         const note = extractCommentary(rawResponse);
         if (note) logger.thought(note);
         logger.toolCall(parsed.name, parsed.args);
@@ -163,6 +167,20 @@ class DeepSeekAgent {
         const feedbackMsg = this.conversation.addToolResult(parsed.name, result, isError);
         await this._send(feedbackMsg);
         continue;
+      }
+
+      // ── Case 1b: Read mid-stream — re-read the finished message ─────────
+      //  The page was scraped before DeepSeek finished; the model's output is
+      //  fine. Drop the partial message and re-read instead of scolding it.
+      if (parsed.type === 'incomplete') {
+        if (++incompleteRetries <= 3) {
+          logger.warn('Response read mid-stream — re-reading...');
+          this.conversation.popLastMessage();
+          expectNew = false;
+          continue;
+        }
+        // Give up re-reading: treat as a real parse error below.
+        parsed = { type: 'error', message: 'tool_call appeared truncated after repeated re-reads', raw: parsed.raw };
       }
 
       // ── Case 2: Parse error ────────────────────────────────────────────

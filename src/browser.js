@@ -6,7 +6,7 @@ const os           = require('os');
 const path         = require('path');
 const config       = require('./config');
 const logger       = require('./logger');
-const { stripThinkingBlocks } = require('./parser');
+const { stripThinkingBlocks, looksIncompleteToolCall } = require('./parser');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Selector banks — ordered by likelihood, with fallbacks
@@ -337,22 +337,26 @@ class DeepSeekBrowser {
    *  4. When the text has not changed for STABLE_DELAY ms AND
    *     no stop/loading indicator is visible → done.
    */
-  async waitForResponse() {
+  async waitForResponse(expectNew = true) {
     const timeout     = config.RESPONSE_TIMEOUT;
     const stableDelay = config.STABLE_DELAY;
     const start       = Date.now();
 
     // ── Phase 1: wait for a new message to appear ──────────────────────────
-    const initialCount = await this._getMessageCount();
-    let   appeared     = false;
+    //  Skipped on a re-read (expectNew=false): the message already exists, so
+    //  waiting for the count to rise would just burn the 12 s timeout.
+    if (expectNew) {
+      const initialCount = await this._getMessageCount();
+      let   appeared     = false;
 
-    while (Date.now() - start < 12_000 && !this.abort) {
-      const count = await this._getMessageCount();
-      if (count > initialCount) { appeared = true; break; }
-      await this.page.waitForTimeout(400);
+      while (Date.now() - start < 12_000 && !this.abort) {
+        const count = await this._getMessageCount();
+        if (count > initialCount) { appeared = true; break; }
+        await this.page.waitForTimeout(400);
+      }
+
+      if (!appeared) logger.warn('Response may have been delayed — continuing to wait...');
     }
-
-    if (!appeared) logger.warn('Response may have been delayed — continuing to wait...');
 
     // ── Phase 2: wait for text to stabilise ───────────────────────────────
     let lastText    = '';
@@ -383,7 +387,11 @@ class DeepSeekBrowser {
       } else if (text.length > 0) {
         if (!stableStart) stableStart = Date.now();
         else if (Date.now() - stableStart >= stableDelay) {
-          if (!await this._isGenerating()) break;  // confirmed done
+          // Confirmed done only if DeepSeek stopped AND the text isn't a tool
+          // call still mid-stream (a server-lag pause can look "stable").
+          // ponytail: on a false positive we just wait to RESPONSE_TIMEOUT and
+          // return anyway — correct, only slower in that rare case.
+          if (!await this._isGenerating() && !looksIncompleteToolCall(text)) break;
           stableStart = null;                       // still generating, reset
         }
       }

@@ -220,6 +220,14 @@ class ConversationManager {
   }
 
   /**
+   * Remove the last recorded message. Used to drop a partial assistant message
+   * that was read mid-stream, before re-reading the finished response.
+   */
+  popLastMessage() {
+    this.messages.pop();
+  }
+
+  /**
    * Get the most recent user message content.
    */
   getLatestUserMessage() {

@@ -43,6 +43,11 @@ function parseResponse(rawText) {
   const bareCall = bare && asCall(parseJson(bare[1].trim()), rawText);
   if (bareCall) return bareCall;
 
+  // ── Read mid-stream: a tool_call whose JSON/fence was cut off part-way ────
+  //  Not the model's fault — the DOM was scraped before DeepSeek finished.
+  //  Signal "incomplete" so the agent re-reads instead of reporting an error.
+  if (looksIncompleteToolCall(text)) return { type: 'incomplete', raw: rawText };
+
   // ── PRIMARY: ```tool_call fenced block (fence rebuilt by getFullText) ─────
   //  Invalid JSON here is a real error worth reporting back to the model.
   const fenced = text.match(/```tool_call\s*([\s\S]*?)```/i);
@@ -169,6 +174,37 @@ function attemptJsonFix(str) {
 }
 
 /**
+ * True if the text (from its first '{') ends inside an unterminated JSON string.
+ * This is the signature of a response scraped while the model was still streaming
+ * a large string value (e.g. a file's content) — distinct from complete-but-malformed
+ * JSON like `{nope`, which is never inside an open string.
+ */
+function endsInUnterminatedString(str) {
+  const start = str.indexOf('{');
+  if (start < 0) return false;
+  let inStr = false, escape = false;
+  for (let i = start; i < str.length; i++) {
+    const ch = str[i];
+    if (escape)               { escape = false; continue; }
+    if (ch === '\\' && inStr) { escape = true;  continue; }
+    if (ch === '"')             inStr = !inStr;
+  }
+  return inStr;
+}
+
+/**
+ * True if `text` looks like a tool call that was captured mid-stream (incomplete):
+ *   - an opening ```tool_call fence with no closing fence yet, or
+ *   - a tool-call object whose JSON ends inside an unterminated string.
+ */
+function looksIncompleteToolCall(text) {
+  const openFence = /```tool_call/i.test(text);
+  if (openFence && !/```tool_call\s*[\s\S]*?```/i.test(text)) return true;
+  if (/["'](?:name|tool|function)["']\s*:/.test(text) && endsInUnterminatedString(text)) return true;
+  return false;
+}
+
+/**
  * Extract the largest valid JSON object from a string.
  * Uses a bracket-counting approach rather than regex to handle nested objects.
  */
@@ -218,4 +254,6 @@ module.exports = {
   parseResponse,
   extractCommentary,
   stripThinkingBlocks,
+  looksIncompleteToolCall,
+  endsInUnterminatedString,
 };
