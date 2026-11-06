@@ -1,7 +1,7 @@
 {
   "name": "deepseek-browser-agent-pro",
   "version": "1.2.0",
-  "description": "Free AI coding agent powered by DeepSeek via browser automation — file/shell tools, its own browser tab, MCP servers, no API key needed",
+  "description": "Free AI coding agent powered by DeepSeek via browser automation — file/shell tools, its own browser tab, parallel subagents, MCP servers, no API key needed",
   "main": "src/index.js",
   "bin": {
     "deepseek-agent": "src/index.js",
@@ -33,6 +33,8 @@
     "browser-automation",
     "playwright",
     "coding-agent",
+    "subagents",
+    "multi-agent",
     "cli",
     "llm",
     "mcp",

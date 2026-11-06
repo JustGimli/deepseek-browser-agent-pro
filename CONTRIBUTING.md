@@ -19,7 +19,9 @@ node src/index.js --interactive
 | `src/agent.js` | Core agent loop — edit this to change how tasks run |
 | `src/browser.js` | Playwright / DOM interaction with chat.deepseek.com |
 | `src/parser.js` | Parses AI text responses into tool calls |
-| `src/tools/` | Tools by area (`fs`, `shell`, `net`, `browser`); `index.js` is the registry |
+| `src/tools/` | Tools by area (`fs`, `shell`, `net`, `browser`, `subagents`); `index.js` is the registry |
+| `src/subagents.js` | `SubagentPool` — runs one task to completion in its own DeepSeek tab |
+| `src/rateLimiter.js` | Send-rate throttle shared by every tab of the one account |
 | `src/mcp.js` | MCP client — registers tools of configured MCP servers |
 | `src/prompt.js` | System prompt sent to DeepSeek |
 | `src/config.js` | Configuration loading |

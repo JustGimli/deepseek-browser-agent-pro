@@ -135,3 +135,4 @@ First public release of `deepseek-browser-agent-pro`, a fork of
 - Better selector resilience for DeepSeek UI changes
 - Support for additional AI frontends
 - Plugin / custom tool system (MCP covers part of it)
+- Subagents: give each subagent its own `browser_*` tab (today they share the main agent's)

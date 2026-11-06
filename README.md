@@ -39,7 +39,7 @@ Your Terminal
      │         │
      │    DeepSeek AI  ← thinks, decides what tool to use
      │         │
-     └──► Tool Executor  ← files, shell, browser tab, MCP servers
+     └──► Tool Executor  ← files, shell, browser tab, subagents, MCP servers
               │
          Your Project / the web
 ```
@@ -375,7 +375,7 @@ node src/index.js --interactive
 
 ### Areas that need work
 
-- 🧪 **Tests** — parser, file/shell tools, `read_url` and the MCP client are covered; browser tools and the agent loop need tests
+- 🧪 **Tests** — parser, file/shell tools, `read_url` and the MCP client are covered; browser tools, the agent loop and subagents need tests
 - 🎨 **UI selector resilience** — DeepSeek updates their UI occasionally; better selector strategies are welcome
 - 🔌 **More tools** — image generation, database tools, MCP over HTTP, etc.
 - 🌐 **Other AI frontends** — adapting the browser layer to work with other free AI chats
