@@ -9,7 +9,7 @@ const config = require('./config');
 //  System prompt — sent as the first message
 // ─────────────────────────────────────────────
 
-function buildSystemPrompt() {
+function buildSystemPrompt(subagentInfo) {
   const toolDocs = getToolDescriptions();
   const cwd      = config.WORKING_DIR;
   const platform = os.platform() + ' ' + os.release();
@@ -36,6 +36,18 @@ function buildSystemPrompt() {
     'Date/Time        : ' + now,
     'Working Directory: ' + cwd,
     '',
+    ...(subagentInfo ? [
+      'SUBAGENT MODE',
+      '─────────────',
+      `You are subagent ${subagentInfo.index}/${subagentInfo.total}, one of several parallel`,
+      'workers running in their own browser tab under the SAME DeepSeek account. All of',
+      'them share that one account\'s send-rate budget, so your sends may pause briefly',
+      'while another subagent is using its turn — that is expected, not an error.',
+      'Stay scoped to your own task below; do not wait on or try to coordinate with the',
+      'other subagents. Your final plain-text answer is collected by the pool, not shown',
+      'directly to the interactive user.',
+      '',
+    ] : []),
     'YOUR CAPABILITIES',
     '─────────────────',
     'You can read/write files, run shell commands, search codebases, fetch URLs,',
@@ -110,6 +122,19 @@ function buildSystemPrompt() {
     '  AdsPower profile). browser_close detaches and returns to the default tab.',
     '- If the same page action fails twice, change approach or report the problem.',
     '',
+    ...(!subagentInfo ? [
+      'SUBAGENTS',
+      '─────────',
+      'spawn_subagents runs several INDEPENDENT subtasks AT ONCE, each in its own tab of',
+      'this same DeepSeek account (shared 2/sec · 120/min send budget — they queue for it,',
+      'never exceed it). Use it when you have 2+ pieces of work that do not depend on each',
+      'other (e.g. investigate several unrelated files, or draft several independent',
+      'modules) instead of doing them one by one. Do NOT use it for a single task, or for',
+      'steps that must happen in order.',
+      "If it's currently disabled, spawn_subagents will tell you — don't keep retrying it,",
+      'just do the work yourself.',
+      '',
+    ] : []),
     ...(hasMcp ? [
       'MCP TOOLS',
       '─────────',
@@ -170,7 +195,7 @@ class ConversationManager {
    * Build the very first user message that includes the system prompt,
    * working-directory context, and the user's task.
    */
-  buildFirstMessage(task, workingDirListing) {
+  buildFirstMessage(task, workingDirListing, subagentInfo) {
     this.primed        = true;
 
     const dirContext = workingDirListing
@@ -178,7 +203,7 @@ class ConversationManager {
       : '';
 
     const firstMessage = [
-      buildSystemPrompt(),
+      buildSystemPrompt(subagentInfo),
       '',
       '═'.repeat(60),
       '',

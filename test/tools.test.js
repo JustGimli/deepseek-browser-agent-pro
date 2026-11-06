@@ -41,6 +41,16 @@ test('replace_in_file keeps "$&" literally and requires a unique match', async (
   assert.strictEqual(read('r.js'), 'const a = "cost $& $1";\nlet b = Z;\nlet c = Z;\n');
 });
 
+test('replace_in_file "No match" points at the first differing line', async () => {
+  file('m.js', '  _isJunk(q) {\n    const s = q.trim();\n    if (s.length > 200) return true;\n  }\n');
+  await assert.rejects(
+    executeTool('replace_in_file', { path: 'm.js', find: '  _isJunk(q) {\n    const s = q.trim();\n    if (s.length > 300) return true;', replace: 'x' }),
+    /line 3 of "find" differs from file line 3:\n  file: "    if \(s\.length > 200\)[^\n]*\n  find: "    if \(s\.length > 300\)/
+  );
+  file('crlf.js', 'a\r\nb\r\n');
+  await assert.rejects(executeTool('replace_in_file', { path: 'crlf.js', find: 'a\nb', replace: 'x' }), /file: "a\\r"/);
+});
+
 test('list_directory / find_files / search_in_files skip node_modules and work without a shell', async () => {
   file('src/app.test.js', 'it("x")\n// TODO: fix "quotes" $(here)\n');
   file('src/app.js', 'one\ntwo\nthree\nfour\n');

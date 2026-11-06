@@ -10,6 +10,7 @@ const DeepSeekBrowser              = require('./browser');
 const InputUI                      = require('./ui');
 const { TOOLS, executeTool }       = require('./tools');
 const web                          = require('./tools/browser');
+const subagentsTool                = require('./tools/subagents');
 const { stopProcesses }            = require('./tools/shell');
 const { walk }                     = require('./tools/util');
 const { connectMcpServers,
@@ -17,6 +18,7 @@ const { connectMcpServers,
 const { parseResponse,
         extractCommentary }        = require('./parser');
 const { ConversationManager }      = require('./prompt');
+const { SubagentPool }             = require('./subagents');
 
 // Slash commands: [command, description]
 const COMMANDS = [
@@ -24,6 +26,8 @@ const COMMANDS = [
   ['/stop',         'stop the running task (or press Esc)'],
   ['/continue',     'keep going after the step limit'],
   ['/history',      'list saved chats'],
+  ['/subagents',      'on|off — let DeepSeek spawn parallel subagents on its own when needed'],
+  ['/subagents-max',  'set MAX_SUBAGENTS, e.g. /subagents-max 6'],
   ['/resume <n>',   'reopen chat number n from /history'],
   ['/context',      'show estimated context usage'],
   ['/headless on',  'restart browser invisibly'],
@@ -59,6 +63,8 @@ class DeepSeekAgent {
   async init({ mcp = true } = {}) {
     await this.browser.launch();
     web.bind(this.browser);
+    this._subagentPool = new SubagentPool(this.browser);
+    subagentsTool.bind(this._subagentPool); // lets DeepSeek call spawn_subagents itself, not just /subagents
     if (mcp) await connectMcpServers();
     await this.browser.newChat();
   }
@@ -99,7 +105,7 @@ class DeepSeekAgent {
 
     const firstMsg = this.conversation.primed
       ? this.conversation.buildFollowUpMessage(task)
-      : this.conversation.buildFirstMessage(task, this._getWorkingDirListing());
+      : this.conversation.buildFirstMessage(task, this._getWorkingDirListing(), this.options.subagentInfo);
     this._chatTask = this._chatTask || task; // first task of this chat: history title + rollover context
 
     if (config.DEBUG) {
@@ -155,7 +161,7 @@ class DeepSeekAgent {
         let isError = false;
 
         try {
-          result  = await executeTool(parsed.name, parsed.args, { signal: this._ctrl.signal });
+          result  = await executeTool(parsed.name, parsed.args, { signal: this._ctrl.signal, isSubagent: !!this.options.subagentInfo });
           logger.toolResult(result);
         } catch (err) {
           result  = `Error: ${err.message}`;
@@ -258,7 +264,7 @@ class DeepSeekAgent {
 
     this.interactive = true;
     ui.start();
-    ui.setStatus({ headless: config.HEADLESS, dir: path.basename(config.WORKING_DIR) });
+    ui.setStatus({ headless: config.HEADLESS, dir: path.basename(config.WORKING_DIR), subagents: config.SUBAGENTS_ENABLED });
     this._showContext();
 
     const ask = async () => ui.ask();
@@ -316,6 +322,21 @@ class DeepSeekAgent {
         await this.browser.newChat();
         this.conversation = new ConversationManager();
         this._chatTask = null;
+        continue;
+      }
+
+      const sem = task.toLowerCase().match(/^\/subagents\s+(on|off)$/);
+      if (sem) {
+        config.SUBAGENTS_ENABLED = sem[1] === 'on';
+        ui.setStatus({ subagents: config.SUBAGENTS_ENABLED });
+        logger.success(`Subagents: ${sem[1]}`);
+        continue;
+      }
+
+      const smx = task.toLowerCase().match(/^\/subagents-max\s+(\d+)$/);
+      if (smx) {
+        config.MAX_SUBAGENTS = Math.max(1, Number(smx[1]));
+        logger.success(`MAX_SUBAGENTS: ${config.MAX_SUBAGENTS}`);
         continue;
       }
 
@@ -432,6 +453,7 @@ class DeepSeekAgent {
 
   /** Upsert this chat (keyed by DeepSeek chat URL) into history.json */
   _saveHistory() {
+    if (this.options.subagentInfo) return; // throwaway subagent chats would push real ones out of /history
     try {
       const url = this.browser.page.url();
       if (!/\/a\/chat\/s\//.test(url)) return; // chat not created yet

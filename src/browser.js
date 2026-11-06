@@ -92,16 +92,36 @@ const SEL = {
 // Banner DeepSeek shows when its backend is overloaded
 const BUSY_RE = /server is (temporarily )?(busy|unavailable)|temporarily unavailable/i;
 
+/**
+ * Chromium keeps SESSION_DIR/SingletonLock → "host-PID" while a browser uses the profile.
+ * A second launch on it is handed to that browser (extra window there, cryptic
+ * "context closed" here), so refuse early. Stale lock (dead PID) → let Chromium handle it.
+ */
+function assertProfileFree(sessionDir) {
+  let pid;
+  try { pid = Number(require('fs').readlinkSync(path.join(sessionDir, 'SingletonLock')).split('-').pop()); }
+  catch { return; }
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try { process.kill(pid, 0); }
+  catch (err) { if (err.code !== 'EPERM') return; }
+  throw new Error(
+    `Another deepseek-agent / Chromium is already using ${sessionDir} (pid ${pid}).\n` +
+    '  → Close it first, or set SESSION_DIR in deepseek-agent.config.json to run a second one.'
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  DeepSeekBrowser class
 // ─────────────────────────────────────────────────────────────────────────────
 
 class DeepSeekBrowser {
   constructor() {
-    this.context  = null;
-    this.page     = null;
-    this._closed  = false;
-    this.abort    = false; // set by the agent to cut waitForResponse short
+    this.context     = null;
+    this.page        = null;
+    this._closed     = false;
+    this.abort       = false; // set by the agent to cut waitForResponse short
+    this.rateLimiter = null;  // shared RateLimiter; set when subagent tabs are in play
+    this.chatPages   = new Set(); // subagent DeepSeek chat tabs — hidden from the browser_* tools
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -110,6 +130,7 @@ class DeepSeekBrowser {
     logger.info('Launching browser with persistent session...');
 
     const sessionDir = path.resolve(config.SESSION_DIR);
+    assertProfileFree(sessionDir);
 
     this.context = await chromium.launchPersistentContext(sessionDir, {
       headless      : config.HEADLESS,
@@ -154,6 +175,32 @@ class DeepSeekBrowser {
     await this.close();
     this._closed = false;
     await this.launch();
+  }
+
+  /**
+   * Open an extra tab in this SAME browser context — same cookies, same logged-in
+   * account, just another chat. Returns a DeepSeekBrowser-shaped handle sharing
+   * this.context (and this.rateLimiter, if set) so callers can drive it with the
+   * usual sendMessage/waitForResponse/newChat methods. Close it with
+   * `tab.page.close()`, not `tab.close()` — that would close the whole context.
+   */
+  async openTab() {
+    const page = await this.context.newPage();
+    const tab  = Object.create(DeepSeekBrowser.prototype);
+    tab.context     = this.context;
+    tab.page        = page;
+    tab._closed     = false;
+    tab.abort       = false;
+    tab.rateLimiter = this.rateLimiter;
+    tab.chatPages   = this.chatPages;
+    this.chatPages.add(page);
+    page.once('close', () => this.chatPages.delete(page));
+
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+    await tab._navigate(config.DEEPSEEK_URL);
+    return tab;
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -251,6 +298,8 @@ class DeepSeekBrowser {
   // ── Sending Messages ───────────────────────────────────────────────────────
 
   async sendMessage(text) {
+    if (this.rateLimiter) await this.rateLimiter.take();
+
     // Find input element
     const { el, isTextarea } = await this._findInput();
 
@@ -301,8 +350,15 @@ class DeepSeekBrowser {
         return { el, isTextarea: tagName === 'textarea' && !isContentEditable };
       } catch {}
     }
+    let where = '';
+    try {
+      const shot = path.join(os.homedir(), '.deepseek-agent', 'logs', `input-missing-${Date.now()}.png`);
+      where = `\n  Page URL: ${this.page.url()}`;
+      await this.screenshot(shot);
+      where += `\n  Screenshot: ${shot}`;
+    } catch {}
     throw new Error(
-      'Cannot find the DeepSeek chat input box.\n' +
+      'Cannot find the DeepSeek chat input box.' + where + '\n' +
       '  → Make sure the page is fully loaded and you are logged in.\n' +
       '  → Run with --debug to inspect DOM selectors.\n' +
       '  → Run: deepseek-agent --calibrate to inspect the page.'
@@ -659,3 +715,4 @@ class DeepSeekBrowser {
 }
 
 module.exports = DeepSeekBrowser;
+module.exports.assertProfileFree = assertProfileFree;

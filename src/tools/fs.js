@@ -10,6 +10,28 @@ const { truncate, resolve, formatBytes, rel, walk } = require('./util');
 /** Show a find/replace snippet in messages without dumping the whole thing */
 const preview = s => JSON.stringify(s.length > 80 ? s.slice(0, 80) + '…' : s);
 
+/** Where does a failed "find" first diverge from the file? Lets the model fix it in one step. */
+function nearMiss(content, find) {
+  const lines = content.split('\n');
+  const want  = find.split('\n');
+  const i     = want.findIndex(l => l.trim());
+  if (i < 0) return '';
+
+  let best = null;
+  lines.forEach((l, at) => {
+    if (l.trim() !== want[i].trim()) return;
+    const start = at - i;
+    let k = 0;
+    while (k < want.length && want[k] === lines[start + k]) k++;
+    if (!best || k > best.k) best = { start, k };
+  });
+  if (!best) return '';
+
+  const q    = s => s === undefined ? '(end of file)' : JSON.stringify(s.slice(0, 300));
+  const at   = best.start + best.k;
+  return `\nClosest match starts at line ${best.start + 1}; line ${best.k + 1} of "find" differs from file line ${at + 1}:\n  file: ${q(lines[at])}\n  find: ${q(want[best.k])}`;
+}
+
 function writeFile(filePath, content, append = false) {
   const abs = resolve(filePath);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -101,7 +123,7 @@ module.exports.tools = {
       const count   = re ? (content.match(re) || []).length : content.split(find).length - 1;
 
       if (count === 0) {
-        throw new Error(`No match for ${preview(find)} in ${filePath} — read the file and copy the exact text (whitespace included)`);
+        throw new Error(`No match for ${preview(find)} in ${filePath} — read the file and copy the exact text (whitespace included)${use_regex ? '' : nearMiss(content, find)}`);
       }
       if (count > 1 && !all_occurrences) {
         throw new Error(`${preview(find)} matches ${count} times in ${filePath} — include more surrounding lines to make it unique, or set all_occurrences=true`);

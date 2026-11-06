@@ -22,6 +22,7 @@ function parseArgs(argv) {
     saveLog     : false,
     workingDir  : null,
     calibrate   : false,
+    subagents   : false,
     help        : false,
     version     : false,
   };
@@ -36,6 +37,8 @@ function parseArgs(argv) {
       case '--headless':    opts.headless    = true;    break;
       case '--save-log':    opts.saveLog     = true;    break;
       case '--calibrate':   opts.calibrate   = true;    break;
+      case '-s':
+      case '--subagents':    opts.subagents   = true;    break;
       case '-v':
       case '--version':     opts.version     = true;    break;
       case '-h':
@@ -83,6 +86,7 @@ function printHelp() {
   --headless           Run browser in headless mode (must be logged in already)
   --save-log           Save conversation log to ~/.deepseek-agent/logs/
   --calibrate          Open browser and print DOM info to help fix selectors
+  -s, --subagents       Let DeepSeek spawn parallel subagents when it decides it needs to
   -v, --version        Print version
   -h, --help           Show this help
 
@@ -145,6 +149,7 @@ async function main() {
   // ── Apply options to config ────────────────────────────────────────────────
   if (opts.debug)      config.DEBUG    = true;
   if (opts.headless)   config.HEADLESS = true;
+  if (opts.subagents) config.SUBAGENTS_ENABLED = true;
   if (opts.workingDir) {
     const resolved = path.resolve(opts.workingDir);
     if (!fs.existsSync(resolved)) {
@@ -160,6 +165,7 @@ async function main() {
   logger.info(`Session directory : \x1b[36m${config.SESSION_DIR}\x1b[0m`);
   logger.info(`Headless mode     : \x1b[36m${config.HEADLESS}\x1b[0m`);
   logger.info(`Debug mode        : \x1b[36m${config.DEBUG}\x1b[0m`);
+  logger.info(`Subagents mode    : \x1b[36m${config.SUBAGENTS_ENABLED}\x1b[0m`);
   console.log('');
 
   // ── Create agent ───────────────────────────────────────────────────────────

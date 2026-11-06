@@ -2,6 +2,14 @@
 'use strict';
 
 const { stripVTControlCharacters } = require('util');
+const { AsyncLocalStorage }        = require('async_hooks');
+
+// Which subagent (if any) is logging right now — carried across awaits, concurrency-safe.
+const ctxStore = new AsyncLocalStorage();
+function tag() {
+  const ctx = ctxStore.getStore();
+  return ctx ? `${A.dim}[sub ${ctx.index}/${ctx.total}]${A.reset} ` : '';
+}
 
 const A = {
   reset   : '\x1b[0m',
@@ -151,18 +159,24 @@ ${c('cyan','╚═════════════════════�
   },
 
   header(msg) {
-    console.log(`\n${c('blue','▍')} ${c('white', msg)}\n`);
+    console.log(`\n${c('blue','▍')} ${tag()}${c('white', msg)}\n`);
   },
 
-  info(msg)    { console.log(`${c('lblue','  ℹ ')} ${msg}`); },
-  success(msg) { console.log(`${c('lgreen','  ✓ ')} ${c('lgreen', msg)}`); },
-  warn(msg)    { console.log(`${c('lyellow','  ⚠ ')} ${c('lyellow', msg)}`); },
-  error(msg)   { console.log(`${c('lred','  ✗ ')} ${c('lred', msg)}`); },
-  dim(msg)     { console.log(`${A.dim}    ${msg}${A.reset}`); },
+  info(msg)    { console.log(`${c('lblue','  ℹ ')} ${tag()}${msg}`); },
+  success(msg) { console.log(`${c('lgreen','  ✓ ')} ${tag()}${c('lgreen', msg)}`); },
+  warn(msg)    { console.log(`${c('lyellow','  ⚠ ')} ${tag()}${c('lyellow', msg)}`); },
+  error(msg)   { console.log(`${c('lred','  ✗ ')} ${tag()}${c('lred', msg)}`); },
+  dim(msg)     { console.log(`${A.dim}    ${tag()}${msg}${A.reset}`); },
 
-  /** Spinner-style line (overwrites itself with \r) */
+  /** Spinner-style line (overwrites itself with \r) — off under a subagent, they'd fight over one line */
   thinking(msg) {
+    if (ctxStore.getStore()) return;
     process.stdout.write(`  ${c('cyan','⟳')} ${c('gray', msg)}\r`);
+  },
+
+  /** Run fn with every log line it (transitively) emits tagged `[sub i/n]` */
+  withContext(ctx, fn) {
+    return ctxStore.run(ctx, fn);
   },
 
   /** Clear the current line */
@@ -188,7 +202,7 @@ ${c('cyan','╚═════════════════════�
       return v.length > 24 ? `${k} ${v.length}ch` : `${k}=${v}`;
     }).join(' ');
     const shown = main.length > 60 ? main.slice(0, 60) + '…' : main;
-    console.log(`\n${c('lmagenta','●')} ${name}${c('gray', '(' + shown + ')')}${rest ? c('gray', '  ' + truncDisplay(rest, 60)) : ''}`);
+    console.log(`\n${c('lmagenta','●')} ${tag()}${name}${c('gray', '(' + shown + ')')}${rest ? c('gray', '  ' + truncDisplay(rest, 60)) : ''}`);
   },
 
   toolResult(result, isError = false) {
@@ -211,7 +225,7 @@ ${c('cyan','╚═════════════════════�
 
   // ── Iteration marker ────────────────────────────────────────────────────────
   iteration(n, max) {
-    console.log(`\n${c('gray', `· step ${n}/${max}`)}`);
+    console.log(`\n${c('gray', `· step ${n}/${max}`)} ${tag()}`);
   },
 };
 

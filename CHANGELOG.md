@@ -7,6 +7,23 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.0] — 2026-11-06
+
+### Added
+- **Subagents**: DeepSeek can now run independent subtasks in parallel, each in its own browser tab under the same logged-in DeepSeek account, via a new `spawn_subagents` tool it calls on its own initiative — there's no human-driven "run these tasks" command, the main agent decides when a task is actually parallelizable
+- Off by default (opt-in, same posture as MCP servers). Toggle at runtime with `/subagents on` / `/subagents off`, or start enabled with `-s` / `--subagents`; current state shown in the status footer and the startup banner
+- `/subagents-max <n>` caps how many subagents can run at once (`MAX_SUBAGENTS`, default 4)
+- All tabs of that one account — main included — share a single send-rate budget (`SUBAGENT_RATE`, default 2/sec · 120/min) so parallel subagents can't hammer the account
+- Concurrent subagent output is tagged `[sub i/n]` in the terminal so interleaved logs from several tabs stay readable
+- Explicit design decision: **no multi-account pooling/distribution**. Spreading requests across several DeepSeek accounts to multiply the per-account rate limit is rate-limit evasion, not a feature — it was considered and rejected during design, not left out by oversight
+- "Cannot find the DeepSeek chat input box" now reports the page URL and saves a screenshot to `~/.deepseek-agent/logs/`
+- Starting a second instance on the same `SESSION_DIR` fails fast with a clear message instead of opening a window in the running browser and failing with "context closed"
+
+### Fixed
+- `browser_*` tools could treat a subagent's DeepSeek chat tab as an agent tab (switch into it after an action, or close it via `browser_tab close` / `browser_close`), breaking that subagent
+- Esc / `/stop` now stops running subagents too, not only the main task
+- Subagent chats no longer fill `/history`
+
 ## [1.1.2] — 2026-10-15
 
 ### Fixed

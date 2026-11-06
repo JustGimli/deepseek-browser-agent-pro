@@ -11,7 +11,7 @@
 
 It drives a real browser to talk to [DeepSeek](https://chat.deepseek.com), giving you a Claude Code / Cursor-style coding agent powered by DeepSeek's models at zero cost. The agent edits files, runs commands, browses the web in its own browser tab and can use any [MCP](https://modelcontextprotocol.io) server.
 
-[Installation](#-installation) · [Quick Start](#-quick-start) · [Usage](#-usage) · [Interactive commands](#-interactive-commands) · [Configuration](#-configuration) · [Tools](#-available-tools) · [MCP servers](#-mcp-servers) · [Contributing](#-contributing)
+[Installation](#-installation) · [Quick Start](#-quick-start) · [Usage](#-usage) · [Interactive commands](#-interactive-commands) · [Configuration](#-configuration) · [Tools](#-available-tools) · [Subagents](#-subagents) · [MCP servers](#-mcp-servers) · [Contributing](#-contributing)
 
 ---
 
@@ -90,6 +90,7 @@ deepseek-agent [OPTIONS] [TASK]
   -d, --dir <path>     Set working directory (default: current directory)
   --debug              Print raw AI responses to the terminal
   --headless           Run browser invisibly (requires prior login)
+  -s, --subagents      Let DeepSeek spawn parallel subagents when it decides it needs to
   --save-log           Save full session log to ~/.deepseek-agent/logs/
   --calibrate          Print DOM info to help fix selectors (run if the agent breaks)
   -v, --version        Print version
@@ -137,6 +138,8 @@ In `--interactive` mode the input box stays at the bottom of the terminal. Type 
 | `/resume <n>` | Reopen chat number *n* from `/history` |
 | `/context` | Show estimated context usage |
 | `/headless on` / `/headless off` | Restart the browser invisibly / with a window |
+| `/subagents on` / `/subagents off` | Let DeepSeek spawn parallel subagents on its own, or not (off by default) |
+| `/subagents-max <n>` | Cap how many subagents can run at once (`MAX_SUBAGENTS`) |
 | `/help` | Show the list |
 | `/exit` | Quit |
 
@@ -192,6 +195,9 @@ Drop `deepseek-agent.config.json` in your project root:
 | `mcpServers` | `{}` | MCP servers to start, see [MCP servers](#-mcp-servers) |
 | `MCP_START_TIMEOUT` | `60000` | Max ms for an MCP server to start and list its tools |
 | `MCP_CALL_TIMEOUT` | `120000` | Max ms for one MCP tool call |
+| `SUBAGENTS_ENABLED` | `false` | Whether DeepSeek may call `spawn_subagents` (same as `/subagents on\|off`) |
+| `MAX_SUBAGENTS` | `4` | Max subagents at once (same as `/subagents-max`) |
+| `SUBAGENT_RATE` | `{ perSec: 2, perMin: 120 }` | Shared send-rate budget across every tab of the one account |
 
 ---
 
@@ -211,6 +217,7 @@ The agent can use these tools autonomously to complete your task:
 | `find_files` | Find files by name glob (e.g. `*.ts`, `src/*.js`) |
 | `search_in_files` | Search text inside files (like `grep -rn`, regex or plain text) |
 | `read_url` | Fast plain-HTTP fetch of a URL (no JavaScript) |
+| `spawn_subagents` | Run 2+ independent subtasks in parallel, each in its own tab under this same account (off by default — see [Subagents](#-subagents)) |
 
 Moving, copying, `mkdir` and `stat` go through `run_command`. File search is pure Node — no `find` / `grep` needed.
 
@@ -231,6 +238,18 @@ The agent gets its own tab in the same Chromium that talks to DeepSeek (cookies 
 | `browser_tab` | `list` / `switch` / `new` / `close` agent tabs |
 | `browser_connect` | Attach to an external Chromium over CDP (`ws://…` or `http://host:port`), e.g. an AdsPower profile |
 | `browser_close` | Close the agent tab; detach from the external browser (it keeps running) |
+
+---
+
+## 🧩 Subagents
+
+DeepSeek can decide, on its own, to split a task into independent pieces and run them in parallel — each subagent gets its own browser tab, its own chat and its own full tool-calling system prompt, under the **same logged-in DeepSeek account** as the main chat. There's no human-driven "run these tasks" command: the main agent studies what you asked, and reaches for `spawn_subagents` only when it finds genuinely independent work (e.g. "check the exports of three unrelated files") — never for a single task or steps that depend on each other.
+
+Off by default. Turn it on with `/subagents on` (or start with `-s` / `--subagents`); current state shows in the status footer and the startup banner. `/subagents-max <n>` caps how many run at once.
+
+**One account, not several.** Every tab — the main chat and every subagent — shares a single send-rate budget (`SUBAGENT_RATE`, default 2 req/sec · 120 req/min); they queue for it, never exceed it. This is a deliberate design decision: spreading requests across *multiple* DeepSeek accounts to multiply that limit would be rate-limit evasion, not a feature, so it isn't supported and won't be added.
+
+Because subagents run concurrently, their terminal output is tagged `[sub i/n]` so you can tell which tab is doing what while they interleave.
 
 ---
 
@@ -320,7 +339,9 @@ deepseek-browser-agent-pro/
 │   ├── index.js          ← CLI entry point and argument parsing
 │   ├── agent.js          ← Core agent loop (send → wait → parse → execute)
 │   ├── browser.js        ← Playwright controller for chat.deepseek.com
-│   ├── tools/            ← Tool registry (index.js) + fs, shell, net, browser tools, util
+│   ├── tools/            ← Tool registry (index.js) + fs, shell, net, browser, subagents tools, util
+│   ├── subagents.js      ← SubagentPool: runs a task to completion in its own tab
+│   ├── rateLimiter.js    ← Shared send-rate throttle across the main tab + subagent tabs
 │   ├── mcp.js            ← MCP client: starts servers, registers their tools
 │   ├── parser.js         ← Extracts tool calls from AI responses (several fallback formats)
 │   ├── prompt.js         ← System prompt and conversation history manager

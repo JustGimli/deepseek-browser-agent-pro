@@ -30,6 +30,11 @@ const defaults = {
   // Agent browser tab (browser_* tools)
   WEB_TIMEOUT      : 30_000,
 
+  // Subagents — parallel tabs under the SAME DeepSeek account (no multi-account pooling)
+  SUBAGENTS_ENABLED : false,       // DeepSeek may call spawn_subagents only when true — toggle: /subagents on|off, or --subagents at startup
+  MAX_SUBAGENTS     : 4,
+  SUBAGENT_RATE     : { perSec: 2, perMin: 120 }, // shared by every tab of the one account
+
   // MCP servers — same format as Claude Desktop / Cursor: { "name": { command, args, env, cwd } }
   mcpServers        : {},
   MCP_START_TIMEOUT : 60_000,  // first `npx -y …` run downloads the package

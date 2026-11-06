@@ -22,7 +22,7 @@ class InputUI {
     this.draft    = '';
     this.commands = [];     // [[cmd, description], ...]
     this.sel      = -1;     // highlighted menu row
-    this.status   = {};     // { busy, step, ctx, headless, dir }
+    this.status   = {};     // { busy, step, ctx, headless, subagents, dir }
     this.active   = false;
     this.fallback = false;
     this.atCaret  = false;  // cursor is parked in the input box (output position is saved by ESC 7)
@@ -153,6 +153,7 @@ class InputUI {
       s.step && s.busy ? `step ${s.step}` : null,
       s.ctx ? `ctx ${s.ctx}` : null,
       s.headless != null ? (s.headless ? 'headless' : 'window') : null,
+      s.subagents != null ? `subagents ${s.subagents ? 'on' : 'off'}` : null,
       s.dir || null,
       s.busy ? 'esc stop · type to message' : '/ commands · alt+enter newline',
     ].filter(Boolean);

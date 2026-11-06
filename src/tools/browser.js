@@ -19,10 +19,10 @@ function context() {
   return web.host?.context || null;
 }
 
-/** Pages the agent may use: everything in the context except the DeepSeek chat */
+/** Pages the agent may use: everything in the context except the DeepSeek chats (main + subagents) */
 function tabs() {
   const ctx = context();
-  return ctx ? ctx.pages().filter(p => p !== web.host?.page && !p.isClosed()) : [];
+  return ctx ? ctx.pages().filter(p => p !== web.host?.page && !web.host?.chatPages?.has(p) && !p.isClosed()) : [];
 }
 
 async function page() {

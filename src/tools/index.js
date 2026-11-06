@@ -7,6 +7,7 @@ const TOOLS = {
   ...require('./shell').tools,
   ...require('./net').tools,
   ...require('./browser').tools,
+  ...require('./subagents').tools,
 };
 
 /** Add a tool at runtime (used by the MCP client) */
